@@ -1,0 +1,35 @@
+# Gradle files & caches
+.gradle/
+build/
+**/build/
+
+# Local machine configuration
+local.properties
+/local.properties
+
+# Android Studio / IntelliJ / AndroidIDE
+*.iml
+.idea/
+/.idea/
+.acside/
+.kotlin/
+.ttxfolder/
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+
+# Built outputs & binaries
+*.apk
+*.aar
+*.aab
+*.dex
+*.class
+bin/
+gen/
+out/
+*.log
+
+# Keystores
+*.jks
+*.keystore
