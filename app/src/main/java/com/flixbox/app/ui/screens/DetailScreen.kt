@@ -25,6 +25,7 @@ import com.flixbox.app.data.MediaModel
 import com.flixbox.app.data.MediaRepository
 import com.flixbox.app.data.SeasonModel
 import com.flixbox.app.ui.theme.*
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 @Composable
@@ -49,8 +50,10 @@ fun DetailScreen(
             seasons = initial
 
             // Preload semua thumbnail season terpilih (index 0) di background
-            initial.firstOrNull()?.episodes?.map { it.path }?.let {
-                kotlinx.coroutines.launch { repository.preloadThumbnails(it) }
+            initial.firstOrNull()?.episodes?.map { it.path }?.let { paths: List<String> ->
+                launch {
+                    repository.preloadThumbnails(paths)
+                }
             }
 
             // Update durasi incremental
@@ -60,7 +63,7 @@ fun DetailScreen(
             flatEpisodes = initial
 
             // Preload semua thumbnail di background
-            kotlinx.coroutines.launch {
+            launch {
                 repository.preloadThumbnails(initial.map { it.path })
             }
 
