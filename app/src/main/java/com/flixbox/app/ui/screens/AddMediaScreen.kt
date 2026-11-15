@@ -386,10 +386,13 @@ fun ImportConfigDialog(
     }
     var selectedCategory by remember { mutableStateOf(MediaCategory.ANIME) }
     var isImporting by remember { mutableStateOf(false) }
+    var isDone by remember { mutableStateOf(false) }
+    var cancelRequested by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(Pair(0, 0)) }
     var error by remember { mutableStateOf("") }
+    var summary by remember { mutableStateOf("") }
 
-    Dialog(onDismissRequest = { if (!isImporting) onDismiss() }) {
+    Dialog(onDismissRequest = { if (isDone) onDone() else if (!isImporting) onDismiss() }) {
         Column(
             modifier = Modifier.fillMaxWidth()
                 .background(FxDark, RoundedCornerShape(12.dp))
@@ -405,7 +408,7 @@ fun ImportConfigDialog(
                 onValueChange = { titleName = it },
                 label = { Text("Nama judul", color = FxGray) },
                 singleLine = true,
-                enabled = !isImporting,
+                enabled = !isImporting && !isDone,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = FxRed, unfocusedBorderColor = FxGray,
                     focusedTextColor = FxWhite, unfocusedTextColor = FxWhite, cursorColor = FxRed
@@ -424,7 +427,7 @@ fun ImportConfigDialog(
                     val sel = selectedCategory == cat
                     Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp))
                         .background(if (sel) FxRed else FxCard)
-                        .clickable(enabled = !isImporting) { selectedCategory = cat }
+                        .clickable(enabled = !isImporting && !isDone) { selectedCategory = cat }
                         .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) { Text(cat.label, color = if (sel) FxWhite else FxGray, fontSize = 12.sp,
@@ -437,7 +440,7 @@ fun ImportConfigDialog(
                     val sel = selectedCategory == cat
                     Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp))
                         .background(if (sel) FxRed else FxCard)
-                        .clickable(enabled = !isImporting) { selectedCategory = cat }
+                        .clickable(enabled = !isImporting && !isDone) { selectedCategory = cat }
                         .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) { Text(cat.label, color = if (sel) FxWhite else FxGray, fontSize = 12.sp,
@@ -453,8 +456,16 @@ fun ImportConfigDialog(
                     color = FxRed, trackColor = FxCard
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Text("Menyalin ${progress.first}/${progress.second} file...",
-                    color = FxGray, fontSize = 12.sp)
+                Text(
+                    if (cancelRequested) "Membatalkan... (${progress.first}/${progress.second})"
+                    else "Menyalin ${progress.first}/${progress.second} file...",
+                    color = FxGray, fontSize = 12.sp
+                )
+            }
+
+            if (isDone) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(summary, color = FxLightGray, fontSize = 12.sp)
             }
 
             if (error.isNotEmpty()) {
@@ -464,37 +475,82 @@ fun ImportConfigDialog(
 
             Spacer(modifier = Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f),
-                    enabled = !isImporting, border = BorderStroke(1.dp, FxGray)) {
-                    Text("Batal", color = FxGray)
-                }
-
-                val scope = androidx.compose.runtime.rememberCoroutineScope()
-                Button(
+                // Satu tombol kiri berfungsi ganda sesuai fase: Batal (belum mulai) →
+                // Batalkan (lagi jalan — benar-benar menghentikan proses, bukan cuma didisable
+                // seperti sebelumnya) → Tutup (sudah selesai, panggil onDone agar Home refresh)
+                OutlinedButton(
                     onClick = {
-                        if (titleName.isBlank()) { error = "Nama tidak boleh kosong"; return@Button }
-                        isImporting = true
-                        error = ""
-                        scope.launch {
-                            var allOk = true
-                            selectedPaths.forEach { path ->
-                                val ok = repository.importToFlixBox(
-                                    sourcePath = path,
-                                    category = selectedCategory,
-                                    titleName = titleName.trim()
-                                ) { done, total -> progress = Pair(done, total) }
-                                if (!ok) allOk = false
-                            }
-                            isImporting = false
-                            if (allOk) onDone() else error = "Beberapa file gagal disalin."
+                        when {
+                            isDone -> onDone()
+                            isImporting -> cancelRequested = true
+                            else -> onDismiss()
                         }
                     },
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = FxRed),
-                    enabled = !isImporting
+                    border = BorderStroke(1.dp, FxGray)
                 ) {
-                    if (isImporting) CircularProgressIndicator(color = FxWhite, modifier = Modifier.size(18.dp))
-                    else Text("Import", color = FxWhite, fontWeight = FontWeight.Bold)
+                    Text(
+                        when {
+                            isDone -> "Tutup"
+                            isImporting -> "Batalkan"
+                            else -> "Batal"
+                        },
+                        color = FxGray
+                    )
+                }
+
+                val scope = androidx.compose.runtime.rememberCoroutineScope()
+                if (!isDone) {
+                    Button(
+                        onClick = {
+                            if (titleName.isBlank()) { error = "Nama tidak boleh kosong"; return@Button }
+                            isImporting = true
+                            cancelRequested = false
+                            error = ""
+                            progress = Pair(0, 0)
+                            scope.launch {
+                                // Hitung total dulu (rekursif, termasuk isi subfolder season)
+                                // supaya progress bar akurat untuk seluruh item yang dipilih.
+                                val grandTotal = selectedPaths.sumOf { repository.countMediaFiles(it) }
+                                var doneSoFar = 0
+                                var copied = 0; var skipped = 0; var renamed = 0; var failed = 0
+                                var wasCancelled = false
+                                for (path in selectedPaths) {
+                                    if (cancelRequested) { wasCancelled = true; break }
+                                    val base = doneSoFar
+                                    val res = repository.importToFlixBox(
+                                        sourcePath = path,
+                                        category = selectedCategory,
+                                        titleName = titleName.trim(),
+                                        onProgress = { done, _ -> progress = Pair(base + done, grandTotal) },
+                                        isCancelled = { cancelRequested }
+                                    )
+                                    copied += res.copiedFiles
+                                    skipped += res.skippedFiles
+                                    renamed += res.renamedFiles
+                                    failed += res.failedFiles
+                                    doneSoFar += res.copiedFiles + res.skippedFiles + res.renamedFiles + res.failedFiles
+                                    if (res.cancelled) { wasCancelled = true; break }
+                                }
+                                isImporting = false
+                                isDone = true
+                                summary = buildString {
+                                    if (wasCancelled) append("Dibatalkan. ")
+                                    append("$copied file disalin")
+                                    if (skipped > 0) append(", $skipped dilewati (sudah ada)")
+                                    if (renamed > 0) append(", $renamed diganti nama (konflik)")
+                                    if (failed > 0) append(", $failed gagal")
+                                    append(".")
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = FxRed),
+                        enabled = !isImporting
+                    ) {
+                        if (isImporting) CircularProgressIndicator(color = FxWhite, modifier = Modifier.size(18.dp))
+                        else Text("Import", color = FxWhite, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

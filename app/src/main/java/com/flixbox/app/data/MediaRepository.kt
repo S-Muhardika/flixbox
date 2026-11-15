@@ -26,6 +26,7 @@ class MediaRepository(private val context: Context) {
         const val ROOT_FOLDER_NAME = ".FlixBox"
         val VIDEO_EXTENSIONS = listOf("mp4", "mkv", "avi", "mov", "webm")
         val IMAGE_EXTENSIONS = listOf("jpg", "jpeg", "png", "webp")
+        val MEDIA_EXTENSIONS = VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
     }
 
     // ── Root dirs ─────────────────────────────────────────────────────────────
@@ -261,29 +262,137 @@ class MediaRepository(private val context: Context) {
         return File(File(root, category.folderName), name).mkdirs()
     }
 
+    // Rangkuman hasil satu panggilan importToFlixBox — dipakai UI untuk tampilkan ringkasan
+    data class ImportResult(
+        val totalFiles: Int = 0,
+        val copiedFiles: Int = 0,
+        val skippedFiles: Int = 0,   // file identik (ukuran sama) sudah ada di tujuan → dilewati
+        val renamedFiles: Int = 0,   // nama bentrok tapi isi beda → disalin dengan nama baru
+        val failedFiles: Int = 0,
+        val cancelled: Boolean = false
+    )
+
+    private enum class CopyOutcome { COPIED, SKIPPED, RENAMED, FAILED }
+
+    // Counter mutable yang dibagi sepanjang rekursi (hindari banyak return value bertingkat)
+    private class ImportCounters {
+        var copied = 0; var skipped = 0; var renamed = 0; var failed = 0; var done = 0
+    }
+
+    // Hitung total file media (video+gambar) secara rekursif — dipakai untuk progress bar akurat
+    private fun countImportableFiles(source: File): Int {
+        if (!source.exists()) return 0
+        if (source.isFile) return if (source.extension.lowercase() in MEDIA_EXTENSIONS) 1 else 0
+        var count = 0
+        source.listFiles()?.forEach { f ->
+            count += if (f.isDirectory) countImportableFiles(f)
+            else if (f.extension.lowercase() in MEDIA_EXTENSIONS) 1 else 0
+        }
+        return count
+    }
+
+    // Versi publik — dipakai UI untuk hitung total sebelum mulai import (progress gabungan multi-item)
+    suspend fun countMediaFiles(path: String): Int = withContext(Dispatchers.IO) {
+        countImportableFiles(File(path))
+    }
+
+    // Salin satu file ke folder tujuan tanpa pernah menimpa file yang sudah ada:
+    // - ukuran sama → dianggap file yang sama, dilewati (SKIPPED)
+    // - ukuran beda tapi nama sama → disalin dengan nama baru "nama (1).ext" dst (RENAMED)
+    private fun copyWithConflictHandling(src: File, destDir: File): CopyOutcome {
+        destDir.mkdirs()
+        var target = File(destDir, src.name)
+        if (target.exists()) {
+            if (target.length() == src.length()) return CopyOutcome.SKIPPED
+            val base = src.nameWithoutExtension
+            val ext = src.extension
+            var n = 1
+            while (target.exists()) {
+                target = File(destDir, if (ext.isNotEmpty()) "$base ($n).$ext" else "$base ($n)")
+                n++
+            }
+            return try {
+                src.copyTo(target, overwrite = false); CopyOutcome.RENAMED
+            } catch (e: Exception) { CopyOutcome.FAILED }
+        }
+        return try {
+            src.copyTo(target, overwrite = false); CopyOutcome.COPIED
+        } catch (e: Exception) { CopyOutcome.FAILED }
+    }
+
+    // Salin ISI srcDir ke destDir secara rekursif, mempertahankan nama subfolder apa adanya
+    // (jadi struktur "Season 1/", "Season 2/" dst ikut terbawa persis). isCancelled dicek
+    // di antar-file sehingga tombol "Batalkan" di UI berhenti secepat file yang sedang
+    // berjalan selesai disalin, bukan harus menunggu seluruh folder selesai.
+    private fun copyContentsRecursive(
+        srcDir: File, destDir: File, counters: ImportCounters, total: Int,
+        onProgress: (Int, Int) -> Unit, isCancelled: () -> Boolean
+    ) {
+        val children = srcDir.listFiles()?.sortedBy { it.name } ?: return
+        for (child in children) {
+            if (isCancelled()) return
+            when {
+                child.isDirectory -> {
+                    copyContentsRecursive(child, File(destDir, child.name), counters, total, onProgress, isCancelled)
+                }
+                child.extension.lowercase() in MEDIA_EXTENSIONS -> {
+                    when (copyWithConflictHandling(child, destDir)) {
+                        CopyOutcome.COPIED -> counters.copied++
+                        CopyOutcome.SKIPPED -> counters.skipped++
+                        CopyOutcome.RENAMED -> counters.renamed++
+                        CopyOutcome.FAILED -> counters.failed++
+                    }
+                    counters.done++
+                    onProgress(counters.done, total)
+                }
+            }
+        }
+    }
+
+    // ── Import rekursif ke FlixBox (P1) ───────────────────────────────────────
+    // sourcePath boleh berupa folder (disalin rekursif, struktur season dipertahankan)
+    // atau satu file video. onProgress melapor (fileSelesai, totalFile) — total dihitung
+    // lebih dulu secara rekursif agar progress bar akurat untuk folder bersarang.
+    // isCancelled dicek berkala; saat true, proses berhenti di titik aman berikutnya dan
+    // hasil sebagian yang sudah tersalin TETAP ada (tidak di-rollback).
     suspend fun importToFlixBox(
         sourcePath: String, category: MediaCategory, titleName: String,
-        rootIndex: Int = 0, onProgress: (Int, Int) -> Unit = { _, _ -> }
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val roots = getRootDirs()
-            val root = roots.getOrElse(rootIndex) { roots.first() }
-            val dest = File(File(root, category.folderName), titleName).also { it.mkdirs() }
-            val source = File(sourcePath)
-            if (source.isDirectory) {
-                val files = (source.listFiles()?.filter {
-                    it.isFile && it.extension.lowercase() in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
-                } ?: emptyList())
-                files.forEachIndexed { i, f ->
-                    onProgress(i + 1, files.size)
-                    f.copyTo(File(dest, f.name), overwrite = true)
-                }
-            } else {
-                onProgress(1, 1)
-                source.copyTo(File(dest, source.name), overwrite = true)
+        rootIndex: Int = 0,
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+        isCancelled: () -> Boolean = { false }
+    ): ImportResult = withContext(Dispatchers.IO) {
+        val source = File(sourcePath)
+        if (!source.exists()) return@withContext ImportResult()
+
+        val total = countImportableFiles(source)
+        if (total == 0) return@withContext ImportResult()
+
+        val roots = getRootDirs()
+        val root = roots.getOrElse(rootIndex) { roots.first() }
+        val dest = File(File(root, category.folderName), titleName).also { it.mkdirs() }
+
+        val counters = ImportCounters()
+        if (source.isDirectory) {
+            copyContentsRecursive(source, dest, counters, total, onProgress, isCancelled)
+        } else if (source.extension.lowercase() in MEDIA_EXTENSIONS && !isCancelled()) {
+            when (copyWithConflictHandling(source, dest)) {
+                CopyOutcome.COPIED -> counters.copied++
+                CopyOutcome.SKIPPED -> counters.skipped++
+                CopyOutcome.RENAMED -> counters.renamed++
+                CopyOutcome.FAILED -> counters.failed++
             }
-            true
-        } catch (e: Exception) { false }
+            counters.done++
+            onProgress(counters.done, total)
+        }
+
+        ImportResult(
+            totalFiles = total,
+            copiedFiles = counters.copied,
+            skippedFiles = counters.skipped,
+            renamedFiles = counters.renamed,
+            failedFiles = counters.failed,
+            cancelled = isCancelled() && counters.done < total
+        )
     }
 
     fun renameFolder(oldPath: String, newName: String): Boolean {
