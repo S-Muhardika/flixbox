@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
 sealed class Screen {
     object Home : Screen()
     object Search : Screen()
+    object Settings : Screen()
     data class Detail(val media: MediaModel) : Screen()
     data class Player(
         val episodes: List<EpisodeModel>,
@@ -100,8 +101,11 @@ fun FlixBoxApp(repository: MediaRepository) {
     var showExitDialog by remember { mutableStateOf(false) }
 
     var cachedMediaList by remember { mutableStateOf(listOf<MediaModel>()) }
+    var isLoadingMedia by remember { mutableStateOf(true) }
     LaunchedEffect(refreshKey) {
+        isLoadingMedia = true
         cachedMediaList = repository.getAllMedia()
+        isLoadingMedia = false
     }
 
     // ── BackHandler global ────────────────────────────────────────────────────
@@ -117,6 +121,9 @@ fun FlixBoxApp(repository: MediaRepository) {
                 currentScreen = Screen.Home
             }
             currentScreen is Screen.Search -> {
+                currentScreen = Screen.Home
+            }
+            currentScreen is Screen.Settings -> {
                 currentScreen = Screen.Home
             }
             currentScreen is Screen.Home -> {
@@ -158,11 +165,21 @@ fun FlixBoxApp(repository: MediaRepository) {
                 key(refreshKey) {
                     HomeScreen(
                         repository = repository,
+                        mediaList = cachedMediaList,
+                        isLoading = isLoadingMedia,
                         onMediaClick = { media -> currentScreen = Screen.Detail(media) },
                         onAddClick = { showAddScreen = true },
-                        onSearchClick = { currentScreen = Screen.Search }
+                        onSearchClick = { currentScreen = Screen.Search },
+                        onSettingsClick = { currentScreen = Screen.Settings }
                     )
                 }
+            }
+
+            is Screen.Settings -> {
+                SettingsScreen(
+                    repository = repository,
+                    onBack = { currentScreen = Screen.Home }
+                )
             }
 
             is Screen.Search -> {

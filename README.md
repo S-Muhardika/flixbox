@@ -4,6 +4,8 @@
 > pengguna terinspirasi Netflix. 100% offline — tidak ada backend, login, cloud sync,
 > komunitas, atau AI di dalam app itu sendiri.
 
+**Versi saat ini:** `2.1.0` (lihat [Changelog](#-changelog))
+
 ---
 
 ## 📋 Daftar Isi
@@ -44,6 +46,7 @@ dengan player yang nyaman, dan mengingat posisi tontonan.
 - Filter kategori: **Anime, Movie, Series, Live Action**
 - Section "Lanjutkan Nonton" untuk media yang sedang ditonton
 - Tema gelap gaya Netflix (hitam-merah), Jetpack Compose + Material3
+- Halaman **Pengaturan** — bersihkan cache thumbnail manual, info versi app
 
 ### Manajemen Media
 - File browser bawaan untuk import dari penyimpanan internal/eksternal
@@ -126,9 +129,12 @@ MainActivity (permission + setContent)
         ├── SearchScreen   → cari berdasarkan judul
         ├── DetailScreen   → season tabs, daftar episode, rename/hapus
         ├── PlayerScreen   → ExoPlayer, kontrol, gesture
-        └── AddMediaScreen → buat folder / file browser & import
+        ├── AddMediaScreen → buat folder / file browser & import
+        └── SettingsScreen → bersihkan cache thumbnail, info versi
 
-data/MediaRepository  → single source of truth, semua I/O berat via Dispatchers.IO
+data/MediaRepository  → single source of truth, semua I/O berat via Dispatchers.IO.
+                         getAllMedia() di-scan sekali per sesi Home (hasil dibagi ke
+                         HomeScreen & SearchScreen, tidak di-scan dobel lagi)
 data/Models           → MediaCategory, MediaModel, SeasonModel, EpisodeModel
 SharedPreferences     → posisi tontonan per episode + riwayat 20 terakhir ditonton
 ```
@@ -205,8 +211,8 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
 ## 🐛 Known Limitations
 
 - Rename/hapus folder tidak membersihkan entry lama di cache thumbnail/durasi
-  (in-memory `LruCache`) — thumbnail basi bisa nongol sampai tergusur LRU atau app
-  restart.
+  (in-memory `LruCache`) secara otomatis — thumbnail basi bisa nongol sampai tergusur
+  LRU atau app restart. Workaround manual: Pengaturan → Bersihkan Cache Thumbnail.
 - Release build (AAB) gagal di AndroidIDE (lihat bagian Build di atas).
 - Belum ada pemilihan subtitle/audio track (direncanakan P3).
 - Belum ada Picture-in-Picture, MediaSession, notifikasi player, atau background
@@ -238,24 +244,12 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
 
 ## 📝 Changelog
 
-### Belum dirilis — Rename & Import System rekursif (P1)
-- Rename proyek dari AnimeFlix → **FlixBox**, package `com.flixbox.app`
-- `MediaRepository.importToFlixBox()` dirombak: rekursif (struktur season ikut
-  tersalin), penanganan konflik file (skip/rename otomatis, tidak pernah menimpa),
-  progress akurat lintas item, dan pembatalan yang benar-benar berfungsi
-- Dokumentasi (README ini) diperbarui agar sesuai working copy saat ini
+Riwayat perubahan lengkap ada di [`CHANGELOG.md`](CHANGELOG.md) (file terpisah, satu
+folder sama dengan README ini). Versi terbaru:
 
-### V2.0.0 — Compose Rework (era AnimeFlix)
-- Rework penuh UI ke Jetpack Compose, desain gaya Netflix dengan hero banner
-- Sistem kategori, section "Lanjutkan Nonton", poster custom, Material3
-
-### V1.0.0 — Full Featured (XML version)
-- `MANAGE_EXTERNAL_STORAGE`, file manager (rename/delete/move), OTG, sleep timer,
-  playback speed, repeat mode
-
-### V0.1–V0.5 — Setup awal hingga Netflix UI pertama
-- Setup AndroidIDE, MediaStore scanning, integrasi ExoPlayer, folder-based scanning,
-  resume playback, UI Netflix pertama dengan RecyclerView
+**v2.1.0** — Rename AnimeFlix → FlixBox, Import System rekursif (P1), optimasi
+performa (thumbnail kecil + scan folder dikonsolidasi + hapus scan dobel), dan
+halaman Pengaturan baru.
 
 ---
 

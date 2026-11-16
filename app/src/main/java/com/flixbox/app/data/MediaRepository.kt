@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
+import android.os.Build
 import android.os.Environment
 import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,11 @@ class MediaRepository(private val context: Context) {
         val VIDEO_EXTENSIONS = listOf("mp4", "mkv", "avi", "mov", "webm")
         val IMAGE_EXTENSIONS = listOf("jpg", "jpeg", "png", "webp")
         val MEDIA_EXTENSIONS = VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
+        // Thumbnail didekode kecil, BUKAN resolusi asli video. Bitmap 1080p penuh ~8MB;
+        // di ukuran ini ~0.5MB — cache jadi muat puluhan thumbnail, bukan cuma ~4 biji
+        // sebelum ke-evict dan memicu decode ulang video tiap scroll (penyebab utama "berat").
+        private const val THUMB_TARGET_W = 480
+        private const val THUMB_TARGET_H = 270
     }
 
     // ── Root dirs ─────────────────────────────────────────────────────────────
@@ -74,7 +80,22 @@ class MediaRepository(private val context: Context) {
                     try {
                         val r = MediaMetadataRetriever()
                         r.setDataSource(path)
-                        val bmp = r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        val bmp = if (Build.VERSION.SDK_INT >= 27) {
+                            // API 27+: retriever langsung decode di ukuran kecil (lebih hemat & cepat)
+                            r.getScaledFrameAtTime(
+                                timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                                THUMB_TARGET_W, THUMB_TARGET_H
+                            )
+                        } else {
+                            // Di bawah API 27 tidak ada versi scaled — decode penuh dulu, baru
+                            // diperkecil, lalu bitmap aslinya langsung dibuang dari memory
+                            r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                ?.let { full ->
+                                    val scaled = Bitmap.createScaledBitmap(full, THUMB_TARGET_W, THUMB_TARGET_H, true)
+                                    if (scaled !== full) full.recycle()
+                                    scaled
+                                }
+                        }
                         r.release()
                         if (bmp != null) thumbnailCache.put(path, bmp)
                         bmp
@@ -93,6 +114,14 @@ class MediaRepository(private val context: Context) {
                 getThumbnail(path)
             }
         }
+    }
+
+    // Bersihkan cache thumbnail & durasi di memory. Dipakai tombol "Bersihkan Cache" di
+    // Pengaturan, dan berguna kalau ada thumbnail basi nyangkut setelah rename/hapus folder
+    // (cache sebelumnya tidak pernah diinvalidasi per path saat rename/delete).
+    fun clearThumbnailCache() {
+        thumbnailCache.evictAll()
+        durationCache.clear()
     }
 
     // ── Duration cache ────────────────────────────────────────────────────────
@@ -201,24 +230,60 @@ class MediaRepository(private val context: Context) {
                 if (!catDir.exists()) catDir.mkdirs()
                 catDir.listFiles()?.sortedBy { it.name }?.forEach { folder ->
                     if (folder.isDirectory && folder.absolutePath !in seen) {
-                        val total = countTotalEpisodes(folder)
-                        if (total > 0) {
+                        scanTitleFolder(folder, category)?.let {
                             seen.add(folder.absolutePath)
-                            result.add(MediaModel(
-                                title = folder.name,
-                                folderPath = folder.absolutePath,
-                                episodeCount = total,
-                                firstEpisodePath = getFirstEpisodePath(folder),
-                                category = category,
-                                posterPath = getPosterPath(folder),
-                                hasSeasons = hasSeasonSubfolders(folder)
-                            ))
+                            result.add(it)
                         }
                     }
                 }
             }
         }
         result
+    }
+
+    // Satu kali listFiles() per folder judul + satu kali per folder season-nya.
+    // Sebelumnya countTotalEpisodes(), getFirstEpisodePath(), getPosterPath(), dan
+    // hasSeasonSubfolders() masing-masing listFiles() SENDIRI-SENDIRI untuk folder yang
+    // sama (4+ panggilan filesystem per judul, lebih lagi untuk season), dan ini dipanggil
+    // ulang tiap kali Home dibuka — makin berat makin banyak judul/season di koleksi.
+    private fun scanTitleFolder(folder: File, category: MediaCategory): MediaModel? {
+        val children = folder.listFiles() ?: return null
+        val seasonFolders = children.filter { it.isDirectory }
+            .sortedWith(compareBy({ extractSeasonNumber(it.name) }, { it.name }))
+        val hasSeasons = seasonFolders.isNotEmpty()
+
+        val totalEpisodes: Int
+        val firstEpisodePath: String
+        if (hasSeasons) {
+            var total = 0
+            var first = ""
+            seasonFolders.forEach { sf ->
+                val eps = getVideoFiles(sf)
+                total += eps.size
+                if (first.isEmpty() && eps.isNotEmpty()) first = eps.first().absolutePath
+            }
+            totalEpisodes = total
+            firstEpisodePath = first
+        } else {
+            val eps = getVideoFiles(folder)
+            totalEpisodes = eps.size
+            firstEpisodePath = eps.firstOrNull()?.absolutePath ?: ""
+        }
+        if (totalEpisodes == 0) return null
+
+        val posterPath = children.firstOrNull {
+            it.isFile && it.extension.lowercase() in IMAGE_EXTENSIONS
+        }?.absolutePath ?: ""
+
+        return MediaModel(
+            title = folder.name,
+            folderPath = folder.absolutePath,
+            episodeCount = totalEpisodes,
+            firstEpisodePath = firstEpisodePath,
+            category = category,
+            posterPath = posterPath,
+            hasSeasons = hasSeasons
+        )
     }
 
     // ── File browser ──────────────────────────────────────────────────────────
@@ -430,25 +495,6 @@ class MediaRepository(private val context: Context) {
         folder.listFiles()?.firstOrNull {
             it.isFile && it.extension.lowercase() in IMAGE_EXTENSIONS
         }?.absolutePath ?: ""
-
-    private fun hasSeasonSubfolders(folder: File) =
-        folder.listFiles()?.any { it.isDirectory } == true
-
-    private fun getFirstEpisodePath(folder: File): String {
-        val seasonFolders = folder.listFiles()?.filter { it.isDirectory }
-            ?.sortedWith(compareBy({ extractSeasonNumber(it.name) }, { it.name }))
-        if (!seasonFolders.isNullOrEmpty()) {
-            val first = getVideoFiles(seasonFolders.first())
-            if (first.isNotEmpty()) return first.first().absolutePath
-        }
-        return getVideoFiles(folder).firstOrNull()?.absolutePath ?: ""
-    }
-
-    private fun countTotalEpisodes(folder: File): Int {
-        val seasons = folder.listFiles()?.filter { it.isDirectory }
-        return if (!seasons.isNullOrEmpty()) seasons.sumOf { getVideoFiles(it).size }
-        else getVideoFiles(folder).size
-    }
 
     private fun extractSeasonNumber(name: String): Int {
         val m = Regex("""[Ss]eason\s*(\d+)|[Ss](\d+)""").find(name)

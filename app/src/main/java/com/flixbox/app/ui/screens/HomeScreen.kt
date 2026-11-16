@@ -49,19 +49,21 @@ fun ShimmerBox(modifier: Modifier) {
 @Composable
 fun HomeScreen(
     repository: MediaRepository,
+    mediaList: List<MediaModel>,
+    isLoading: Boolean,
     onMediaClick: (MediaModel) -> Unit,
     onAddClick: () -> Unit,
-    onSearchClick: () -> Unit
+    onSearchClick: () -> Unit,
+    onSettingsClick: () -> Unit
 ) {
-    var mediaList by remember { mutableStateOf(listOf<MediaModel>()) }
     var selectedCategory by remember { mutableStateOf(MediaCategory.ALL) }
-    var isLoading by remember { mutableStateOf(true) }
     var heroBannerIndex by remember { mutableStateOf(0) }
 
-    LaunchedEffect(Unit) {
-        mediaList = repository.getAllMedia()
-        isLoading = false
-    }
+    // mediaList & isLoading sekarang dikirim dari FlixBoxApp (satu sumber data), bukan
+    // di-fetch ulang di sini. Sebelumnya HomeScreen punya LaunchedEffect sendiri yang
+    // manggil repository.getAllMedia() lagi — artinya seluruh koleksi di-scan filesystem DUA
+    // KALI setiap kali Home tampil (sekali di FlixBoxApp untuk SearchScreen, sekali lagi di
+    // sini), padahal hasilnya sama persis. Ini salah satu penyebab app terasa berat.
 
     // Auto-rotate hero banner tiap 6 detik
     LaunchedEffect(mediaList) {
@@ -181,6 +183,7 @@ fun HomeScreen(
         TopNavBar(
             onSearchClick = onSearchClick,
             onAddClick = onAddClick,
+            onSettingsClick = onSettingsClick,
             modifier = Modifier.align(Alignment.TopCenter)
         )
     }
@@ -188,7 +191,12 @@ fun HomeScreen(
 
 // ── Top Navbar ─────────────────────────────────────────────────────────────────
 @Composable
-fun TopNavBar(onSearchClick: () -> Unit, onAddClick: () -> Unit, modifier: Modifier = Modifier) {
+fun TopNavBar(
+    onSearchClick: () -> Unit,
+    onAddClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Box(
         modifier = modifier.fillMaxWidth().height(80.dp).background(
             Brush.verticalGradient(listOf(FxBlack.copy(alpha = 0.9f), Color.Transparent))
@@ -208,6 +216,9 @@ fun TopNavBar(onSearchClick: () -> Unit, onAddClick: () -> Unit, modifier: Modif
                 }
                 IconButton(onClick = onAddClick) {
                     Icon(Icons.Default.Add, "Tambah", tint = FxWhite)
+                }
+                IconButton(onClick = onSettingsClick) {
+                    Icon(Icons.Default.Settings, "Pengaturan", tint = FxWhite)
                 }
             }
         }
