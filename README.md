@@ -4,7 +4,7 @@
 > pengguna terinspirasi Netflix. 100% offline — tidak ada backend, login, cloud sync,
 > komunitas, atau AI di dalam app itu sendiri.
 
-**Versi saat ini:** `2.1.0` (lihat [Changelog](#-changelog))
+**Versi saat ini:** `2.2.0` (lihat [Changelog](#-changelog))
 
 ---
 
@@ -64,13 +64,17 @@ dengan player yang nyaman, dan mengingat posisi tontonan.
 - Playback speed: 0.5x–2x, repeat episode, sleep timer
 - Previous/next episode + auto-next setelah episode selesai
 - Double-tap seek ±10 detik, gesture volume (kanan) & brightness (kiri)
-- Resume otomatis dari posisi terakhir per episode
+- Resume otomatis dari posisi terakhir per episode; posisi disimpan berkala (tiap
+  10 detik) selama main, bukan cuma saat pindah episode/keluar player
 - Progress bar merah per episode di daftar episode
+- Tap "Lanjutkan Nonton" di Home langsung buka Player di episode & posisi terakhir
+  (tidak perlu buka Detail dulu)
 
 ### Lainnya
 - Search berdasarkan judul media
-- Thumbnail diambil otomatis dari frame video (via `MediaMetadataRetriever`),
-  di-cache di memory (`LruCache`, dibatasi ~1/8 heap) agar tidak lag
+- Thumbnail diambil otomatis dari frame video (via `MediaMetadataRetriever`) di
+  ukuran kecil (480×270), di-cache dua lapis: memory (`LruCache`) dan disk
+  (`cacheDir/thumbs`) — sekali didekode, tidak perlu decode ulang tiap buka app
 - Mendukung penyimpanan internal **dan** eksternal secara otomatis
 
 ---
@@ -210,9 +214,13 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
 
 ## 🐛 Known Limitations
 
-- Rename/hapus folder tidak membersihkan entry lama di cache thumbnail/durasi
-  (in-memory `LruCache`) secara otomatis — thumbnail basi bisa nongol sampai tergusur
-  LRU atau app restart. Workaround manual: Pengaturan → Bersihkan Cache Thumbnail.
+- Rename/hapus folder tidak membersihkan entry lama di cache thumbnail (memory
+  **dan** disk) atau cache durasi secara otomatis — thumbnail basi bisa nongol
+  sampai tergusur LRU/app restart. Workaround manual: Pengaturan → Bersihkan Cache
+  Thumbnail.
+- Posisi tontonan disimpan tiap 10 detik selama main (bukan tiap detik) — kalau app
+  ke-kill paksa di antara dua penyimpanan, maksimal ~10 detik progres yang hilang.
+- Belum ada tanda/badge "sudah selesai ditonton" per episode (sisa dari P2).
 - Release build (AAB) gagal di AndroidIDE (lihat bagian Build di atas).
 - Belum ada pemilihan subtitle/audio track (direncanakan P3).
 - Belum ada Picture-in-Picture, MediaSession, notifikasi player, atau background
@@ -231,8 +239,8 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
 - [x] **P0** — Audit source terbaru, stabilisasi, pengujian dasar
 - [x] **P1** — Import System rekursif: pertahankan struktur folder season, tangani
       konflik file, progres import akurat, dan pembatalan
-- [ ] **P2** — Continue Watching yang langsung lanjut ke episode terakhir, simpan
-      progres berkala, status selesai ditonton
+- [~] **P2** (sebagian) — ~~Continue Watching langsung lanjut ke episode terakhir~~,
+      ~~simpan progres berkala~~ sudah; status selesai ditonton per episode belum
 - [ ] **P3** — Pemilihan subtitle & audio track, termasuk subtitle eksternal
 - [ ] **P4** — Favorite, Watchlist, status tontonan, pencarian episode, sorting,
       pengelolaan metadata

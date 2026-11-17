@@ -52,6 +52,7 @@ fun HomeScreen(
     mediaList: List<MediaModel>,
     isLoading: Boolean,
     onMediaClick: (MediaModel) -> Unit,
+    onContinueWatchingClick: (MediaModel) -> Unit,
     onAddClick: () -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit
@@ -149,7 +150,7 @@ fun HomeScreen(
                             items = recentMedia,
                             repository = repository,
                             cardType = CardType.WIDE,
-                            onItemClick = onMediaClick
+                            onItemClick = onContinueWatchingClick
                         )
                     }
                 }

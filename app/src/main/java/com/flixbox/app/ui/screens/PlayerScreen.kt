@@ -164,6 +164,19 @@ fun PlayerScreen(
         }
     }
 
+    // Simpan posisi tontonan berkala (P2). Sebelumnya posisi cuma disimpan saat pindah
+    // episode atau keluar player (onDispose) — kalau app ke-kill paksa (low memory,
+    // force-stop) di tengah nonton, progres sejak save terakhir hilang dan "Lanjutkan
+    // Nonton" jadi mundur jauh dari posisi terakhir yang sebenarnya.
+    LaunchedEffect(player) {
+        while (true) {
+            delay(10_000L)
+            episodes.getOrNull(currentIndex)?.let {
+                repository.saveWatchedPosition(it.path, player.currentPosition)
+            }
+        }
+    }
+
     // Auto-hide controls
     LaunchedEffect(showControls, isPlaying) {
         if (showControls && isPlaying) {

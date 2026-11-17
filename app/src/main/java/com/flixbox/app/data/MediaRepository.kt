@@ -3,10 +3,12 @@ package com.flixbox.app.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Environment
 import android.util.LruCache
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -55,56 +57,104 @@ class MediaRepository(private val context: Context) {
     }
 
     // ── Thumbnail cache ───────────────────────────────────────────────────────
+    // Dua lapis: memory (LruCache, cepat tapi hilang kalau app di-kill) dan disk
+    // (context.cacheDir/thumbs, bertahan antar sesi). Sebelumnya cuma ada memory cache,
+    // jadi SETIAP kali app dibuka ulang / Home di-load lagi dari kondisi dingin, semua
+    // thumbnail didekode ulang dari video dari nol — makin banyak judul, makin kerasa
+    // "muncul tapi lama/lag". Dengan disk cache, cuma didekode dari video SEKALI seumur
+    // file (sampai cache dibersihkan manual atau filenya diganti).
     private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
     private val thumbnailCache = object : LruCache<String, Bitmap>(maxMemory / 8) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
     }
 
-    // Batasi max 3 thumbnail load bersamaan
+    // Batasi max 3 decode VIDEO bersamaan (operasi berat) — baca dari disk cache
+    // TIDAK lewat semaphore ini karena jauh lebih ringan, lihat getThumbnail() di bawah.
     private val thumbnailSemaphore = Semaphore(3)
     private val loadMutex = Mutex()
-    private val loadingPaths = mutableSetOf<String>()
+    // Dulu pakai Set<String> dan request yang "nyusul" langsung dikasih null permanen
+    // (tidak pernah dicoba ulang) — kalau 2 tempat di UI minta thumbnail yang sama
+    // bersamaan, salah satunya nyangkut shimmer selamanya walau yang satu lagi berhasil.
+    // Sekarang request yang nyusul ikut nunggu hasil yang lagi jalan lewat Deferred ini.
+    private val inFlightThumbnails = mutableMapOf<String, CompletableDeferred<Bitmap?>>()
 
     // Ambil dari cache — null kalau belum ada (tidak trigger load)
     fun getCachedThumbnail(path: String): Bitmap? = thumbnailCache.get(path)
 
+    private fun thumbnailDiskCacheFile(path: String): File {
+        val hash = java.security.MessageDigest.getInstance("MD5").digest(path.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return File(context.cacheDir, "thumbs/$hash.jpg")
+    }
+
+    private fun loadThumbnailFromDisk(path: String): Bitmap? {
+        val f = thumbnailDiskCacheFile(path)
+        if (!f.exists()) return null
+        return try { BitmapFactory.decodeFile(f.absolutePath) } catch (e: Exception) { null }
+    }
+
+    private fun saveThumbnailToDisk(path: String, bmp: Bitmap) {
+        try {
+            val f = thumbnailDiskCacheFile(path)
+            f.parentFile?.mkdirs()
+            f.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 85, out) }
+        } catch (e: Exception) { /* gagal nulis cache bukan fatal, cuma berarti decode lagi nanti */ }
+    }
+
+    private fun decodeThumbnailFromVideo(path: String, timeUs: Long): Bitmap? = try {
+        val r = MediaMetadataRetriever()
+        r.setDataSource(path)
+        val bmp = if (Build.VERSION.SDK_INT >= 27) {
+            // API 27+: retriever langsung decode di ukuran kecil (lebih hemat & cepat)
+            r.getScaledFrameAtTime(
+                timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, THUMB_TARGET_W, THUMB_TARGET_H
+            )
+        } else {
+            // Di bawah API 27 tidak ada versi scaled — decode penuh dulu, baru diperkecil,
+            // lalu bitmap aslinya langsung dibuang dari memory
+            r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
+                val scaled = Bitmap.createScaledBitmap(full, THUMB_TARGET_W, THUMB_TARGET_H, true)
+                if (scaled !== full) full.recycle()
+                scaled
+            }
+        }
+        r.release()
+        bmp
+    } catch (e: Exception) { null }
+
     suspend fun getThumbnail(path: String, timeUs: Long = 30_000_000L): Bitmap? {
         thumbnailCache.get(path)?.let { return it }
-        loadMutex.withLock {
-            if (path in loadingPaths) return null
-            loadingPaths.add(path)
-        }
-        return try {
-            thumbnailSemaphore.withPermit {
-                withContext(Dispatchers.IO) {
-                    try {
-                        val r = MediaMetadataRetriever()
-                        r.setDataSource(path)
-                        val bmp = if (Build.VERSION.SDK_INT >= 27) {
-                            // API 27+: retriever langsung decode di ukuran kecil (lebih hemat & cepat)
-                            r.getScaledFrameAtTime(
-                                timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                                THUMB_TARGET_W, THUMB_TARGET_H
-                            )
-                        } else {
-                            // Di bawah API 27 tidak ada versi scaled — decode penuh dulu, baru
-                            // diperkecil, lalu bitmap aslinya langsung dibuang dari memory
-                            r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                                ?.let { full ->
-                                    val scaled = Bitmap.createScaledBitmap(full, THUMB_TARGET_W, THUMB_TARGET_H, true)
-                                    if (scaled !== full) full.recycle()
-                                    scaled
-                                }
-                        }
-                        r.release()
-                        if (bmp != null) thumbnailCache.put(path, bmp)
-                        bmp
-                    } catch (e: Exception) { null }
+
+        // Request yang sama lagi jalan di tempat lain? Tunggu hasilnya, jangan decode dobel
+        // dan jangan langsung balikin null.
+        val waiting = loadMutex.withLock { inFlightThumbnails[path] }
+        if (waiting != null) return waiting.await()
+
+        val deferred = CompletableDeferred<Bitmap?>()
+        loadMutex.withLock { inFlightThumbnails[path] = deferred }
+
+        val result = withContext(Dispatchers.IO) {
+            val fromDisk = loadThumbnailFromDisk(path)
+            if (fromDisk != null) {
+                thumbnailCache.put(path, fromDisk)
+                fromDisk
+            } else {
+                // Cuma decode video (berat) yang antre lewat semaphore — baca disk cache
+                // di atas sengaja TIDAK ikut antre karena jauh lebih ringan/cepat.
+                thumbnailSemaphore.withPermit {
+                    val decoded = decodeThumbnailFromVideo(path, timeUs)
+                    if (decoded != null) {
+                        thumbnailCache.put(path, decoded)
+                        saveThumbnailToDisk(path, decoded)
+                    }
+                    decoded
                 }
             }
-        } finally {
-            loadMutex.withLock { loadingPaths.remove(path) }
         }
+
+        loadMutex.withLock { inFlightThumbnails.remove(path) }
+        deferred.complete(result)
+        return result
     }
 
     // Preload semua thumbnail sekaligus (dipanggil dari DetailScreen)
@@ -116,12 +166,14 @@ class MediaRepository(private val context: Context) {
         }
     }
 
-    // Bersihkan cache thumbnail & durasi di memory. Dipakai tombol "Bersihkan Cache" di
-    // Pengaturan, dan berguna kalau ada thumbnail basi nyangkut setelah rename/hapus folder
-    // (cache sebelumnya tidak pernah diinvalidasi per path saat rename/delete).
+    // Bersihkan cache thumbnail (memory + disk) & durasi. Dipakai tombol "Bersihkan Cache"
+    // di Pengaturan, dan berguna kalau ada thumbnail basi nyangkut setelah rename/hapus
+    // folder (cache sebelumnya — dan disk cache yang baru ini juga — tidak diinvalidasi
+    // otomatis per path saat rename/delete).
     fun clearThumbnailCache() {
         thumbnailCache.evictAll()
         durationCache.clear()
+        try { File(context.cacheDir, "thumbs").deleteRecursively() } catch (e: Exception) { }
     }
 
     // ── Duration cache ────────────────────────────────────────────────────────

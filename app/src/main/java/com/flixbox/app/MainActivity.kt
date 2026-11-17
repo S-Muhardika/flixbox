@@ -27,6 +27,7 @@ import com.flixbox.app.data.MediaModel
 import com.flixbox.app.data.MediaRepository
 import com.flixbox.app.ui.screens.*
 import com.flixbox.app.ui.theme.*
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -108,6 +109,32 @@ fun FlixBoxApp(repository: MediaRepository) {
         isLoadingMedia = false
     }
 
+    val scope = rememberCoroutineScope()
+
+    // P2: tap kartu "Lanjutkan Nonton" → langsung ke Player di episode & posisi terakhir,
+    // bukan cuma buka Detail lagi. Episode terakhir dicari dari getRecentlyWatched(),
+    // lalu dicocokkan ke daftar episode (digabung semua season kalau ada, sama persis
+    // seperti cara DetailScreen menyusun daftar buat tombol play biasa).
+    val onContinueWatchingClick: (MediaModel) -> Unit = { media ->
+        scope.launch {
+            val lastPath = repository.getRecentlyWatched()
+                .firstOrNull { (path, _) -> path.startsWith(media.folderPath) }
+                ?.first
+            val episodes = if (media.hasSeasons) {
+                repository.getSeasons(media.folderPath).flatMap { it.episodes }
+            } else {
+                repository.getEpisodes(media.folderPath)
+            }
+            if (episodes.isNotEmpty()) {
+                val idx = episodes.indexOfFirst { it.path == lastPath }.let { if (it >= 0) it else 0 }
+                currentScreen = Screen.Player(episodes = episodes, startIndex = idx, sourceMedia = media)
+            } else {
+                // Episode terakhir sudah tidak ada (terhapus/dipindah) — fallback ke Detail
+                currentScreen = Screen.Detail(media)
+            }
+        }
+    }
+
     // ── BackHandler global ────────────────────────────────────────────────────
     BackHandler(enabled = true) {
         when {
@@ -168,6 +195,7 @@ fun FlixBoxApp(repository: MediaRepository) {
                         mediaList = cachedMediaList,
                         isLoading = isLoadingMedia,
                         onMediaClick = { media -> currentScreen = Screen.Detail(media) },
+                        onContinueWatchingClick = onContinueWatchingClick,
                         onAddClick = { showAddScreen = true },
                         onSearchClick = { currentScreen = Screen.Search },
                         onSettingsClick = { currentScreen = Screen.Settings }
