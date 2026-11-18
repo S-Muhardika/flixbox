@@ -4,7 +4,7 @@
 > pengguna terinspirasi Netflix. 100% offline — tidak ada backend, login, cloud sync,
 > komunitas, atau AI di dalam app itu sendiri.
 
-**Versi saat ini:** `2.2.0` (lihat [Changelog](#-changelog))
+**Versi saat ini:** `2.4.0` (lihat [Changelog](#-changelog))
 
 ---
 
@@ -66,9 +66,14 @@ dengan player yang nyaman, dan mengingat posisi tontonan.
 - Double-tap seek ±10 detik, gesture volume (kanan) & brightness (kiri)
 - Resume otomatis dari posisi terakhir per episode; posisi disimpan berkala (tiap
   10 detik) selama main, bukan cuma saat pindah episode/keluar player
+- Subtitle eksternal (`.srt`/`.vtt`/`.ass`/`.ssa`) — auto-terdeteksi dari nama
+  file, attach manual kalau tidak cocok, sinkronisasi delay ±0.5 detik
+- Pemilihan audio track untuk file dengan lebih dari satu track (dual audio)
 - Progress bar merah per episode di daftar episode
 - Tap "Lanjutkan Nonton" di Home langsung buka Player di episode & posisi terakhir
   (tidak perlu buka Detail dulu)
+- Badge "selesai ditonton" di daftar episode (Detail) untuk episode yang sudah
+  ditonton sampai habis
 
 ### Lainnya
 - Search berdasarkan judul media
@@ -220,7 +225,12 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
   Thumbnail.
 - Posisi tontonan disimpan tiap 10 detik selama main (bukan tiap detik) — kalau app
   ke-kill paksa di antara dua penyimpanan, maksimal ~10 detik progres yang hilang.
-- Belum ada tanda/badge "sudah selesai ditonton" per episode (sisa dari P2).
+- Belum ada terjemahan subtitle otomatis atau pengaturan posisi subtitle di
+  layar (sengaja tidak termasuk P3, dibahas terpisah kalau dibutuhkan nanti).
+- ASS/SSA didukung "minimal" oleh Media3 — teks & timing benar, styling custom
+  ala fansub (posisi/animasi/warna khusus) kemungkinan tidak ter-render.
+- Ganti/geser subtitle pada file subtitle yang sangat besar bisa terasa nge-lag
+  sepersekian detik (operasi baca-tulis file teks berjalan di thread utama).
 - Release build (AAB) gagal di AndroidIDE (lihat bagian Build di atas).
 - Belum ada pemilihan subtitle/audio track (direncanakan P3).
 - Belum ada Picture-in-Picture, MediaSession, notifikasi player, atau background
@@ -239,9 +249,10 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
 - [x] **P0** — Audit source terbaru, stabilisasi, pengujian dasar
 - [x] **P1** — Import System rekursif: pertahankan struktur folder season, tangani
       konflik file, progres import akurat, dan pembatalan
-- [~] **P2** (sebagian) — ~~Continue Watching langsung lanjut ke episode terakhir~~,
-      ~~simpan progres berkala~~ sudah; status selesai ditonton per episode belum
-- [ ] **P3** — Pemilihan subtitle & audio track, termasuk subtitle eksternal
+- [x] **P2** — Continue Watching langsung lanjut ke episode terakhir, progres
+      disimpan berkala, status selesai ditonton (badge di Detail)
+- [x] **P3** — Pemilihan subtitle & audio track, termasuk subtitle eksternal
+      (auto-detect by nama file, attach manual, sinkronisasi delay)
 - [ ] **P4** — Favorite, Watchlist, status tontonan, pencarian episode, sorting,
       pengelolaan metadata
 - [ ] **P5** — Picture-in-Picture, MediaSession, notifikasi player, background playback

@@ -4,6 +4,37 @@ Semua perubahan penting dicatat di sini. Format bebas, urut dari versi terbaru.
 
 ---
 
+## v2.4.0 — P3: Subtitle eksternal & pemilihan audio track
+
+- **Subtitle eksternal** (`.srt`, `.vtt`, `.ass`/`.ssa` — ketiganya native Media3,
+  tanpa dependency baru):
+  - Auto-terdeteksi kalau nama file subtitle sama dengan video (beda ekstensi,
+    boleh ada tambahan kode bahasa, mis. `Episode 01.id.srt`)
+  - Kalau nama tidak cocok: tombol "+ Tambah Subtitle Manual" di dialog Subtitle &
+    Audio, pilih file lewat file browser — sekali pilih, otomatis kedetect lagi
+    lain kali (file disalin & disesuaikan namanya)
+  - Sinkronisasi: geser ±0.5 detik kalau subtitle tidak pas dengan videonya,
+    tersimpan per file subtitle
+  - ASS/SSA cuma didukung "minimal" oleh Media3 — teks & timing benar, styling
+    custom ala fansub (posisi, animasi, warna khusus) kemungkinan tidak ter-render
+- **Pemilihan audio track** — kalau file videonya punya lebih dari satu track audio
+  (dual audio dkk), bisa pilih lewat dialog yang sama
+- Tombol baru di player (ikon subtitle) untuk buka dialog "Subtitle & Audio"
+- *Tidak termasuk di P3 ini: terjemahan otomatis subtitle (item terpisah, lihat
+  diskusi sebelumnya) dan pengaturan posisi subtitle di layar*
+- Catatan kecil: ganti/geser subtitle pada file subtitle yang sangat besar bisa
+  terasa nge-lag sepersekian detik (operasi baca-tulis file teks, bukan video,
+  jadi dampaknya kecil untuk subtitle berukuran wajar)
+
+## v2.3.0 — P2 selesai: status selesai ditonton
+
+- Episode yang sudah ditonton sampai 15 detik terakhir (toleransi credit/outro)
+  ditandai selesai ditonton secara permanen (tetap nempel walau di-rewind lagi)
+- Badge centang merah muncul di pojok thumbnail episode yang sudah selesai ditonton
+  (halaman Detail)
+- **P2 sekarang selesai 100%**: lanjut otomatis ke episode terakhir ✓, simpan
+  progres berkala ✓, status selesai ditonton ✓
+
 ## v2.2.0 — Continue Watching lanjut otomatis (P2, sebagian) & perbaikan thumbnail lag
 
 - **Lanjutkan Nonton** di Home sekarang langsung buka Player di episode & posisi

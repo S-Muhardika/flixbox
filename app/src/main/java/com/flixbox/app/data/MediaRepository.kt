@@ -30,11 +30,18 @@ class MediaRepository(private val context: Context) {
         val VIDEO_EXTENSIONS = listOf("mp4", "mkv", "avi", "mov", "webm")
         val IMAGE_EXTENSIONS = listOf("jpg", "jpeg", "png", "webp")
         val MEDIA_EXTENSIONS = VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
+        // .srt, .vtt, .ass/.ssa — ketiganya didukung native oleh Media3, tidak perlu
+        // dependency tambahan (ASS/SSA cuma dukungan "minimal": teks & timing kebaca
+        // benar, styling/posisi custom ala fansub kemungkinan tidak ikut ter-render)
+        val SUBTITLE_EXTENSIONS = listOf("srt", "vtt", "ass", "ssa")
         // Thumbnail didekode kecil, BUKAN resolusi asli video. Bitmap 1080p penuh ~8MB;
         // di ukuran ini ~0.5MB — cache jadi muat puluhan thumbnail, bukan cuma ~4 biji
         // sebelum ke-evict dan memicu decode ulang video tiap scroll (penyebab utama "berat").
         private const val THUMB_TARGET_W = 480
         private const val THUMB_TARGET_H = 270
+        // Episode dianggap "selesai ditonton" kalau sisa tontonan tinggal segini atau
+        // kurang (buat nolerir durasi credit/outro di akhir video)
+        private const val WATCHED_COMPLETE_THRESHOLD_MS = 15_000L
     }
 
     // ── Root dirs ─────────────────────────────────────────────────────────────
@@ -521,10 +528,20 @@ class MediaRepository(private val context: Context) {
 
     // ── Watch progress ────────────────────────────────────────────────────────
     fun getWatchedPosition(path: String): Long = prefs.getLong("pos_$path", 0L)
-    fun saveWatchedPosition(path: String, position: Long) {
+
+    // duration opsional: kalau diisi dan posisi sudah dekat akhir (sisa < 15 detik),
+    // episode ditandai selesai ditonton (P2, bagian terakhir yang kemarin belum).
+    // Sekali ditandai selesai, statusnya tetap nempel walau nanti di-rewind untuk
+    // nonton ulang sebagian — sama seperti badge "sudah ditonton" di Netflix dkk.
+    fun saveWatchedPosition(path: String, position: Long, duration: Long = 0L) {
         if (path.isEmpty() || position < 0) return
         prefs.edit().putLong("pos_$path", position).apply()
+        if (duration > 0 && position >= duration - WATCHED_COMPLETE_THRESHOLD_MS) {
+            prefs.edit().putBoolean("done_$path", true).apply()
+        }
     }
+
+    fun isWatchedComplete(path: String): Boolean = prefs.getBoolean("done_$path", false)
     fun getRecentlyWatched(): List<Pair<String, Long>> {
         val raw = prefs.getString("recently_watched", "") ?: ""
         if (raw.isEmpty()) return emptyList()
@@ -541,6 +558,95 @@ class MediaRepository(private val context: Context) {
         prefs.edit().putString("recently_watched",
             list.take(20).joinToString("|") { "${it.first},${it.second}" }).apply()
     }
+
+    // ── Subtitle (P3) ─────────────────────────────────────────────────────────
+    // Pairing video↔subtitle: cocokkan berdasarkan NAMA FILE yang sama (atau nama sama
+    // + kode bahasa, misal "Episode 01.id.srt"), karena itu satu-satunya cara yang bisa
+    // diandalkan tanpa baca isi file. Kalau namanya beda, user attach manual sekali lewat
+    // attachSubtitle() — yang nyalin file itu supaya namanya ikut cocok, jadi lain kali
+    // otomatis ketemu lagi tanpa perlu pilih ulang.
+    fun findSubtitlesForEpisode(episodePath: String): List<File> {
+        val video = File(episodePath)
+        val baseName = video.nameWithoutExtension
+        val dir = video.parentFile ?: return emptyList()
+        return dir.listFiles()?.filter { f ->
+            f.isFile && f.extension.lowercase() in SUBTITLE_EXTENSIONS &&
+                (f.nameWithoutExtension == baseName || f.nameWithoutExtension.startsWith("$baseName."))
+        }?.sortedBy { it.name } ?: emptyList()
+    }
+
+    // Salin file subtitle yang dipilih manual supaya namanya cocok dengan video (base name
+    // sama), lalu ditaruh di folder yang sama persis — otomatis kedetect lagi lain kali oleh
+    // findSubtitlesForEpisode(). Overwrite kalau sebelumnya sudah pernah attach manual juga
+    // (saat ini cuma 1 subtitle manual per episode; subtitle hasil auto-detect dengan nama
+    // berbeda tetap aman, tidak ketimpa).
+    fun attachSubtitle(episodePath: String, pickedFile: File): File? {
+        val video = File(episodePath)
+        val dir = video.parentFile ?: return null
+        val target = File(dir, "${video.nameWithoutExtension}.${pickedFile.extension.lowercase()}")
+        return try {
+            pickedFile.copyTo(target, overwrite = true)
+            target
+        } catch (e: Exception) { null }
+    }
+
+    fun getSubtitleDelayMs(episodePath: String): Long = prefs.getLong("subdelay_$episodePath", 0L)
+    fun saveSubtitleDelayMs(episodePath: String, delayMs: Long) {
+        prefs.edit().putLong("subdelay_$episodePath", delayMs).apply()
+    }
+
+    fun subtitleMimeType(file: File): String = when (file.extension.lowercase()) {
+        "srt" -> "application/x-subrip"
+        "vtt" -> "text/vtt"
+        "ass", "ssa" -> "text/x-ssa"
+        else -> "text/x-ssa"
+    }
+
+    // Kalau delayMs == 0, pakai file subtitle aslinya langsung. Kalau tidak, bikin salinan
+    // di cache dengan timestamp digeser (ExoPlayer tidak punya API delay/offset langsung
+    // buat subtitle eksternal, jadi caranya adalah menulis ulang waktu tampilnya).
+    fun prepareSubtitleForPlayback(subtitleFile: File, delayMs: Long): File {
+        if (delayMs == 0L) return subtitleFile
+        return try {
+            val ext = subtitleFile.extension.lowercase()
+            val content = subtitleFile.readText()
+            val shifted = if (ext == "ass" || ext == "ssa") shiftAssTimestamps(content, delayMs)
+                else shiftSrtVttTimestamps(content, delayMs)
+            val out = File(context.cacheDir, "subs/${subtitleFile.nameWithoutExtension}_shifted.$ext")
+            out.parentFile?.mkdirs()
+            out.writeText(shifted)
+            out
+        } catch (e: Exception) { subtitleFile }
+    }
+
+    // Format SRT/VTT: 00:01:23,456 (SRT pakai koma) atau 00:01:23.456 (VTT pakai titik)
+    private val srtVttTimeRegex = Regex("""(\d{1,2}):(\d{2}):(\d{2})([.,])(\d{3})""")
+    private fun shiftSrtVttTimestamps(content: String, delayMs: Long): String =
+        srtVttTimeRegex.replace(content) { m ->
+            val (h, mi, s) = Triple(m.groupValues[1].toLong(), m.groupValues[2].toLong(), m.groupValues[3].toLong())
+            val sep = m.groupValues[4]
+            val ms = m.groupValues[5].toLong()
+            var total = (((h * 60 + mi) * 60 + s) * 1000 + ms) + delayMs
+            if (total < 0) total = 0
+            val nh = total / 3_600_000; total %= 3_600_000
+            val nm = total / 60_000; total %= 60_000
+            val ns = total / 1000; val nms = total % 1000
+            "%02d:%02d:%02d%s%03d".format(nh, nm, ns, sep, nms)
+        }
+
+    // Format ASS/SSA: 0:01:23.45 (centisecond, 2 digit, jam cuma 1 digit)
+    private val assTimeRegex = Regex("""(\d{1,2}):(\d{2}):(\d{2})\.(\d{2})""")
+    private fun shiftAssTimestamps(content: String, delayMs: Long): String =
+        assTimeRegex.replace(content) { m ->
+            val (h, mi, s) = Triple(m.groupValues[1].toLong(), m.groupValues[2].toLong(), m.groupValues[3].toLong())
+            val cs = m.groupValues[4].toLong()
+            var total = (((h * 60 + mi) * 60 + s) * 1000 + cs * 10) + delayMs
+            if (total < 0) total = 0
+            val nh = total / 3_600_000; total %= 3_600_000
+            val nm = total / 60_000; total %= 60_000
+            val ns = total / 1000; val ncs = (total % 1000) / 10
+            "%d:%02d:%02d.%02d".format(nh, nm, ns, ncs)
+        }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
     fun getPosterPath(folder: File): String =
