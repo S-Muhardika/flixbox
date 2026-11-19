@@ -341,7 +341,8 @@ class MediaRepository(private val context: Context) {
             firstEpisodePath = firstEpisodePath,
             category = category,
             posterPath = posterPath,
-            hasSeasons = hasSeasons
+            hasSeasons = hasSeasons,
+            dateAdded = folder.lastModified()
         )
     }
 
@@ -526,6 +527,110 @@ class MediaRepository(private val context: Context) {
     fun deleteFolder(path: String): Boolean = File(path).deleteRecursively()
     fun deleteFile(path: String): Boolean = File(path).delete()
 
+    // Ubah judul & kategori sekaligus (P4 — metadata). Kalau dua-duanya berubah, rename
+    // dulu baru pindah kategori, supaya yang dipindah sudah pakai nama barunya. Setiap
+    // tahap migrasikan juga key SharedPreferences-nya (lihat migratePrefsPath) — tanpa ini,
+    // posisi tontonan, status selesai, Favorite, Watchlist, dan counter status tontonan
+    // SEMUA hilang begitu path folder berubah, karena semuanya disimpan per-path.
+    fun editMediaInfo(folderPath: String, newTitle: String, newCategory: MediaCategory): String? {
+        var currentPath = folderPath
+        val currentFolder = File(currentPath)
+        if (newTitle.isNotBlank() && newTitle != currentFolder.name) {
+            val target = File(currentFolder.parent ?: return null, newTitle)
+            if (currentFolder.renameTo(target)) {
+                migratePrefsPath(currentPath, target.absolutePath)
+                currentPath = target.absolutePath
+            } else return null
+        }
+        val afterRename = File(currentPath)
+        if (afterRename.parentFile?.name != newCategory.folderName) {
+            val moved = moveToCategory(currentPath, newCategory) ?: return currentPath
+            migratePrefsPath(currentPath, moved)
+            return moved
+        }
+        return currentPath
+    }
+
+    // Pindahkan semua key SharedPreferences yang path-nya diawali oldPath (folder judul
+    // ATAU semua episode di dalamnya) ke prefix path yang baru. Berlaku generik untuk
+    // semua jenis key di app ini yang formatnya "<prefix>_<path>" — pos_, done_,
+    // subdelay_, fav_, watchlist_, watchedcount_ — tanpa perlu daftar manual per jenis.
+    private fun migratePrefsPath(oldPath: String, newPath: String) {
+        if (oldPath == newPath) return
+        val all = prefs.all
+        val toMigrate = all.keys.filter { key ->
+            val afterPrefix = key.substringAfter('_', missingDelimiterValue = "")
+            afterPrefix == oldPath || afterPrefix.startsWith("$oldPath/")
+        }
+        if (toMigrate.isEmpty()) return
+        val editor = prefs.edit()
+        toMigrate.forEach { key ->
+            val prefixEnd = key.indexOf('_') + 1
+            val prefix = key.substring(0, prefixEnd)
+            val pathPart = key.substring(prefixEnd)
+            val newKey = prefix + newPath + pathPart.removePrefix(oldPath)
+            when (val value = all[key]) {
+                is Boolean -> editor.putBoolean(newKey, value)
+                is Long -> editor.putLong(newKey, value)
+                is Int -> editor.putInt(newKey, value)
+                is String -> editor.putString(newKey, value)
+                is Float -> editor.putFloat(newKey, value)
+                else -> {}
+            }
+            editor.remove(key)
+        }
+        // "Lanjutkan Nonton" simpan semua path di DALAM satu string gabungan
+        // ("recently_watched"), bukan per-key — jadi diganti isinya langsung.
+        val recentRaw = prefs.getString("recently_watched", "") ?: ""
+        if (recentRaw.isNotEmpty()) {
+            val updated = recentRaw.split("|").joinToString("|") { entry ->
+                if (entry.startsWith("$oldPath/")) newPath + entry.removePrefix(oldPath) else entry
+            }
+            if (updated != recentRaw) editor.putString("recently_watched", updated)
+        }
+        editor.apply()
+    }
+
+    // Pindahkan folder judul ke kategori lain (P4 — pengelolaan metadata). Root
+    // penyimpanan dicari dengan naik 2 level dari folder judul (judul → kategori → root),
+    // persis struktur yang dipakai getAllMedia()/scanTitleFolder().
+    fun moveToCategory(folderPath: String, newCategory: MediaCategory): String? {
+        val folder = File(folderPath)
+        val root = folder.parentFile?.parentFile ?: return null
+        val newParent = File(root, newCategory.folderName).also { it.mkdirs() }
+        val target = File(newParent, folder.name)
+        return if (folder.renameTo(target)) target.absolutePath else null
+    }
+
+    // ── Favorite & Watchlist (P4) ─────────────────────────────────────────────
+    fun isFavorite(folderPath: String): Boolean = prefs.getBoolean("fav_$folderPath", false)
+    fun setFavorite(folderPath: String, value: Boolean) {
+        prefs.edit().putBoolean("fav_$folderPath", value).apply()
+    }
+    fun isInWatchlist(folderPath: String): Boolean = prefs.getBoolean("watchlist_$folderPath", false)
+    fun setWatchlist(folderPath: String, value: Boolean) {
+        prefs.edit().putBoolean("watchlist_$folderPath", value).apply()
+    }
+
+    // ── Pencarian episode (P4) ────────────────────────────────────────────────
+    // Scan nama file episode di semua judul — cuma listFiles() (murah, tanpa decode
+    // thumbnail/durasi), tapi tetap O(jumlah judul) jadi sengaja dipanggil manual oleh
+    // SearchScreen (debounced), bukan otomatis tiap ketik seperti pencarian judul.
+    data class EpisodeSearchResult(val media: MediaModel, val episode: EpisodeModel)
+
+    suspend fun searchEpisodes(allMedia: List<MediaModel>, query: String): List<EpisodeSearchResult> =
+        withContext(Dispatchers.IO) {
+            if (query.isBlank()) return@withContext emptyList()
+            val result = mutableListOf<EpisodeSearchResult>()
+            for (media in allMedia) {
+                val episodes = if (media.hasSeasons) getSeasons(media.folderPath).flatMap { it.episodes }
+                    else getEpisodes(media.folderPath)
+                episodes.filter { it.title.contains(query, ignoreCase = true) }
+                    .forEach { result.add(EpisodeSearchResult(media, it)) }
+            }
+            result
+        }
+
     // ── Watch progress ────────────────────────────────────────────────────────
     fun getWatchedPosition(path: String): Long = prefs.getLong("pos_$path", 0L)
 
@@ -533,15 +638,38 @@ class MediaRepository(private val context: Context) {
     // episode ditandai selesai ditonton (P2, bagian terakhir yang kemarin belum).
     // Sekali ditandai selesai, statusnya tetap nempel walau nanti di-rewind untuk
     // nonton ulang sebagian — sama seperti badge "sudah ditonton" di Netflix dkk.
-    fun saveWatchedPosition(path: String, position: Long, duration: Long = 0L) {
+    // titleFolderPath opsional: kalau diisi, dipakai buat update counter episode-selesai
+    // per judul (lihat getWatchStatus()) — tanpa ini, status tontonan P4 tidak ikut
+    // ter-update tapi posisi & status per-episode tetap jalan seperti biasa.
+    fun saveWatchedPosition(path: String, position: Long, duration: Long = 0L, titleFolderPath: String = "") {
         if (path.isEmpty() || position < 0) return
         prefs.edit().putLong("pos_$path", position).apply()
         if (duration > 0 && position >= duration - WATCHED_COMPLETE_THRESHOLD_MS) {
+            val alreadyDone = prefs.getBoolean("done_$path", false)
             prefs.edit().putBoolean("done_$path", true).apply()
+            if (!alreadyDone && titleFolderPath.isNotEmpty()) {
+                val current = prefs.getInt("watchedcount_$titleFolderPath", 0)
+                prefs.edit().putInt("watchedcount_$titleFolderPath", current + 1).apply()
+            }
         }
     }
 
     fun isWatchedComplete(path: String): Boolean = prefs.getBoolean("done_$path", false)
+
+    // Status tontonan per judul (P4) — dari counter ringan di atas dibandingkan
+    // episodeCount, BUKAN dari scan ulang semua episode (supaya filter di Home tetap
+    // cepat walau koleksinya besar). Catatan: counter ini bisa sedikit meleset kalau
+    // episode dihapus/di-reimport setelah sebagian ditonton — sama seperti keterbatasan
+    // cache thumbnail yang sudah didokumentasikan di README.
+    fun getWatchStatus(media: MediaModel): WatchStatus {
+        if (media.episodeCount <= 0) return WatchStatus.BELUM_DITONTON
+        val watchedCount = prefs.getInt("watchedcount_${media.folderPath}", 0)
+        return when {
+            watchedCount <= 0 -> WatchStatus.BELUM_DITONTON
+            watchedCount >= media.episodeCount -> WatchStatus.SELESAI
+            else -> WatchStatus.SEDANG_DITONTON
+        }
+    }
     fun getRecentlyWatched(): List<Pair<String, Long>> {
         val raw = prefs.getString("recently_watched", "") ?: ""
         if (raw.isEmpty()) return emptyList()

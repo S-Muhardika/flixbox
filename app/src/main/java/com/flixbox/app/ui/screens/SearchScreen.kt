@@ -20,15 +20,18 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
+import com.flixbox.app.data.EpisodeModel
 import com.flixbox.app.data.MediaModel
 import com.flixbox.app.data.MediaRepository
 import com.flixbox.app.ui.theme.*
+import kotlinx.coroutines.delay
 
 @Composable
 fun SearchScreen(
     repository: MediaRepository,
     allMedia: List<MediaModel>,
     onMediaClick: (MediaModel) -> Unit,
+    onEpisodeClick: (MediaModel, EpisodeModel) -> Unit,
     onBack: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
@@ -36,6 +39,23 @@ fun SearchScreen(
     val results = remember(query, allMedia) {
         if (query.isBlank()) emptyList()
         else allMedia.filter { it.title.contains(query, ignoreCase = true) }
+    }
+
+    // P4: pencarian episode — sengaja di-debounce (tunggu user berhenti ngetik dulu)
+    // karena ini scan nama file semua episode di semua judul, bukan filter in-memory
+    // instan kayak pencarian judul. Biar tidak keulang-ulang tiap keystroke.
+    var episodeResults by remember { mutableStateOf<List<MediaRepository.EpisodeSearchResult>>(emptyList()) }
+    var isSearchingEpisodes by remember { mutableStateOf(false) }
+    LaunchedEffect(query, allMedia) {
+        if (query.isBlank()) {
+            episodeResults = emptyList()
+            isSearchingEpisodes = false
+        } else {
+            isSearchingEpisodes = true
+            delay(400)
+            episodeResults = repository.searchEpisodes(allMedia, query)
+            isSearchingEpisodes = false
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(FxBlack).statusBarsPadding()) {
@@ -80,7 +100,7 @@ fun SearchScreen(
         if (query.isBlank()) {
             // Browse all by category
             BrowseAll(allMedia = allMedia, repository = repository, onMediaClick = onMediaClick)
-        } else if (results.isEmpty()) {
+        } else if (results.isEmpty() && episodeResults.isEmpty() && !isSearchingEpisodes) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.SearchOff, null, tint = FxGray, modifier = Modifier.size(56.dp))
@@ -91,12 +111,26 @@ fun SearchScreen(
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 8.dp)) {
-                item {
-                    Text("${results.size} hasil", color = FxGray, fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                if (results.isNotEmpty()) {
+                    item {
+                        Text("Judul (${results.size})", color = FxGray, fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                    }
+                    items(results) { media ->
+                        SearchResultItem(media, repository, onClick = { onMediaClick(media) })
+                    }
                 }
-                items(results) { media ->
-                    SearchResultItem(media, repository, onClick = { onMediaClick(media) })
+                if (isSearchingEpisodes || episodeResults.isNotEmpty()) {
+                    item {
+                        Text(
+                            if (isSearchingEpisodes) "Mencari episode..." else "Episode (${episodeResults.size})",
+                            color = FxGray, fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
+                    items(episodeResults) { r ->
+                        EpisodeSearchResultItem(r, repository, onClick = { onEpisodeClick(r.media, r.episode) })
+                    }
                 }
             }
         }
@@ -166,6 +200,42 @@ fun BrowseCategoryCard(
             Text("$count judul", color = FxGray, fontSize = 12.sp)
         }
     }
+}
+
+// P4 — item hasil pencarian episode: thumbnail episode + judul induk + nama episode
+@Composable
+fun EpisodeSearchResultItem(
+    result: MediaRepository.EpisodeSearchResult,
+    repository: MediaRepository,
+    onClick: () -> Unit
+) {
+    val episode = result.episode
+    var bitmap by remember(episode.path) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(episode.path) { bitmap = repository.getThumbnail(episode.path) }
+
+    Row(modifier = Modifier.fillMaxWidth().clickable { onClick() }
+        .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.width(96.dp).height(54.dp)
+            .clip(RoundedCornerShape(6.dp)).background(FxCard)) {
+            if (bitmap != null) {
+                Image(bitmap!!.asImageBitmap(), null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                ShimmerBox(modifier = Modifier.fillMaxSize())
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(episode.title, color = FxWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(result.media.title, color = FxGray, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(Icons.Default.PlayCircle, null, tint = FxRed, modifier = Modifier.size(22.dp))
+    }
+    HorizontalDivider(color = FxCard, modifier = Modifier.padding(horizontal = 16.dp))
 }
 
 @Composable

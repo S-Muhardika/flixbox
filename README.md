@@ -4,7 +4,7 @@
 > pengguna terinspirasi Netflix. 100% offline — tidak ada backend, login, cloud sync,
 > komunitas, atau AI di dalam app itu sendiri.
 
-**Versi saat ini:** `2.4.0` (lihat [Changelog](#-changelog))
+**Versi saat ini:** `2.5.0` (lihat [Changelog](#-changelog))
 
 ---
 
@@ -44,7 +44,9 @@ dengan player yang nyaman, dan mengingat posisi tontonan.
 ### Tampilan
 - Home dengan hero banner (auto-rotate tiap ~6 detik dari daftar media)
 - Filter kategori: **Anime, Movie, Series, Live Action**
-- Section "Lanjutkan Nonton" untuk media yang sedang ditonton
+- Section "Lanjutkan Nonton", **Favorite**, dan **Watchlist** (muncul kalau ada isinya)
+- Filter status tontonan (Belum/Sedang/Selesai Ditonton) & sorting (A-Z, Z-A,
+  Terbaru Ditambah) lewat dialog "Filter & Urutkan"
 - Tema gelap gaya Netflix (hitam-merah), Jetpack Compose + Material3
 - Halaman **Pengaturan** — bersihkan cache thumbnail manual, info versi app
 
@@ -54,7 +56,8 @@ dengan player yang nyaman, dan mengingat posisi tontonan.
   konflik nama file ditangani (skip kalau identik, disalin dengan nama baru kalau beda),
   progress akurat lintas banyak item sekaligus, dan bisa dibatalkan di tengah proses
 - Buat folder judul baru + pilih kategori
-- Rename & hapus folder judul, hapus episode satuan
+- **Edit Info** (ganti judul & kategori sekaligus), hapus folder judul, hapus episode satuan
+- **Favorite** & **Watchlist** — toggle dari halaman Detail
 - Grouping otomatis per season (folder = satu season) atau flat (tanpa season)
 - Poster custom opsional — taruh file gambar (jpg/jpeg/png/webp) apa saja di folder
   judul/season, otomatis dipakai sebagai poster
@@ -76,7 +79,8 @@ dengan player yang nyaman, dan mengingat posisi tontonan.
   ditonton sampai habis
 
 ### Lainnya
-- Search berdasarkan judul media
+- Search berdasarkan judul media **dan** nama episode (hasil episode tampil
+  terpisah, tap langsung buka Player di episode itu)
 - Thumbnail diambil otomatis dari frame video (via `MediaMetadataRetriever`) di
   ukuran kecil (480×270), di-cache dua lapis: memory (`LruCache`) dan disk
   (`cacheDir/thumbs`) — sekali didekode, tidak perlu decode ulang tiap buka app
@@ -231,6 +235,10 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
   ala fansub (posisi/animasi/warna khusus) kemungkinan tidak ter-render.
 - Ganti/geser subtitle pada file subtitle yang sangat besar bisa terasa nge-lag
   sepersekian detik (operasi baca-tulis file teks berjalan di thread utama).
+- Favorite, Watchlist, dan counter status tontonan disimpan per-path folder (sama
+  seperti cache lain) — kalau folder judul di-rename/dipindah **di luar app**
+  (lewat file manager lain), status-status ini tidak ikut pindah dan akan reset.
+  Rename/pindah kategori **lewat Edit Info di dalam app** aman, statusnya tetap.
 - Release build (AAB) gagal di AndroidIDE (lihat bagian Build di atas).
 - Belum ada pemilihan subtitle/audio track (direncanakan P3).
 - Belum ada Picture-in-Picture, MediaSession, notifikasi player, atau background
@@ -253,8 +261,8 @@ cd /storage/emulated/0/AndroidIDEProjects/flixbox
       disimpan berkala, status selesai ditonton (badge di Detail)
 - [x] **P3** — Pemilihan subtitle & audio track, termasuk subtitle eksternal
       (auto-detect by nama file, attach manual, sinkronisasi delay)
-- [ ] **P4** — Favorite, Watchlist, status tontonan, pencarian episode, sorting,
-      pengelolaan metadata
+- [x] **P4** — Favorite, Watchlist, filter status tontonan, pencarian episode,
+      sorting (A-Z/Z-A/Terbaru), edit judul & kategori
 - [ ] **P5** — Picture-in-Picture, MediaSession, notifikasi player, background playback
 - [ ] **P6** — Evaluasi Room, SAF, MediaStore, OTG, persistent thumbnail cache,
       optimasi performa

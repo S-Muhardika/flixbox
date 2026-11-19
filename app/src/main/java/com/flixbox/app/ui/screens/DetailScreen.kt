@@ -21,11 +21,11 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.flixbox.app.data.EpisodeModel
+import com.flixbox.app.data.MediaCategory
 import com.flixbox.app.data.MediaModel
 import com.flixbox.app.data.MediaRepository
 import com.flixbox.app.data.SeasonModel
 import com.flixbox.app.ui.theme.*
-import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 @Composable
@@ -40,9 +40,12 @@ fun DetailScreen(
     var flatEpisodes by remember { mutableStateOf(listOf<EpisodeModel>()) }
     var bannerBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedSeasonIndex by remember { mutableStateOf(0) }
-    var showRenameDialog by remember { mutableStateOf(false) }
+    var showEditInfoDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var selectedEpisode by remember { mutableStateOf<EpisodeModel?>(null) }
+    // P4: Favorite & Watchlist — dibaca sekali per folderPath, diubah langsung tiap tap
+    var isFavorite by remember(media.folderPath) { mutableStateOf(repository.isFavorite(media.folderPath)) }
+    var isInWatchlist by remember(media.folderPath) { mutableStateOf(repository.isInWatchlist(media.folderPath)) }
 
     LaunchedEffect(media.folderPath) {
         if (media.hasSeasons) {
@@ -50,10 +53,8 @@ fun DetailScreen(
             seasons = initial
 
             // Preload semua thumbnail season terpilih (index 0) di background
-            initial.firstOrNull()?.episodes?.map { it.path }?.let { paths: List<String> ->
-                launch {
-                    repository.preloadThumbnails(paths)
-                }
+            initial.firstOrNull()?.episodes?.map { it.path }?.let {
+                kotlinx.coroutines.launch { repository.preloadThumbnails(it) }
             }
 
             // Update durasi incremental
@@ -63,7 +64,7 @@ fun DetailScreen(
             flatEpisodes = initial
 
             // Preload semua thumbnail di background
-            launch {
+            kotlinx.coroutines.launch {
                 repository.preloadThumbnails(initial.map { it.path })
             }
 
@@ -92,10 +93,14 @@ fun DetailScreen(
         if (media.hasSeasons) seasons.flatMap { it.episodes } else flatEpisodes
     }
 
-    if (showRenameDialog) {
-        RenameDialog(currentName = media.title, onDismiss = { showRenameDialog = false }) { newName ->
-            repository.renameFolder(media.folderPath, newName)
-            showRenameDialog = false
+    if (showEditInfoDialog) {
+        EditInfoDialog(
+            currentName = media.title,
+            currentCategory = media.category,
+            onDismiss = { showEditInfoDialog = false }
+        ) { newName, newCategory ->
+            repository.editMediaInfo(media.folderPath, newName, newCategory)
+            showEditInfoDialog = false
             onBack()
         }
     }
@@ -186,7 +191,23 @@ fun DetailScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceEvenly) {
-                            ActionBtn(Icons.Default.Edit, "Rename") { showRenameDialog = true }
+                            ActionBtn(
+                                icon = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                label = "Favorite",
+                                tint = if (isFavorite) FxRed else FxWhite
+                            ) {
+                                isFavorite = !isFavorite
+                                repository.setFavorite(media.folderPath, isFavorite)
+                            }
+                            ActionBtn(
+                                icon = if (isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                label = "Watchlist",
+                                tint = if (isInWatchlist) FxRed else FxWhite
+                            ) {
+                                isInWatchlist = !isInWatchlist
+                                repository.setWatchlist(media.folderPath, isInWatchlist)
+                            }
+                            ActionBtn(Icons.Default.Edit, "Edit Info") { showEditInfoDialog = true }
                             ActionBtn(Icons.Default.Delete, "Hapus") { showDeleteDialog = true }
                         }
                     }
@@ -226,6 +247,7 @@ fun DetailScreen(
                     episode = ep,
                     repository = repository,
                     watchedPosition = repository.getWatchedPosition(ep.path),
+                    isWatched = repository.isWatchedComplete(ep.path),
                     onClick = { onPlayEpisode(ep, allEpisodes) },
                     onMoreClick = { selectedEpisode = ep }
                 )
@@ -282,6 +304,7 @@ fun EpisodeItem(
     episode: EpisodeModel,
     repository: MediaRepository,
     watchedPosition: Long,
+    isWatched: Boolean,
     onClick: () -> Unit,
     onMoreClick: () -> Unit
 ) {
@@ -321,6 +344,16 @@ fun EpisodeItem(
                     modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter),
                     color = FxRed, trackColor = Color.White.copy(alpha = 0.25f)
                 )
+            }
+            // Badge "sudah ditonton" (P2) — pojok kiri-atas biar tidak tabrakan sama durasi
+            if (isWatched) {
+                Box(modifier = Modifier.align(Alignment.TopStart).padding(4.dp)
+                    .size(18.dp).clip(RoundedCornerShape(50)).background(FxRed),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Check, "Sudah ditonton", tint = FxWhite,
+                        modifier = Modifier.size(12.dp))
+                }
             }
             // Duration badge
             Box(modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
@@ -370,34 +403,76 @@ fun CategoryBadge(label: String) {
 }
 
 @Composable
-fun ActionBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+fun ActionBtn(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color = FxWhite,
+    onClick: () -> Unit
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.clickable { onClick() }.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Icon(icon, null, tint = FxWhite, modifier = Modifier.size(24.dp))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
         Spacer(modifier = Modifier.height(4.dp))
         Text(label, color = FxGray, fontSize = 11.sp)
     }
 }
 
+// P4 — edit metadata: judul & kategori sekaligus (gabungan dari fitur "Rename" lama)
 @Composable
-fun RenameDialog(currentName: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+fun EditInfoDialog(
+    currentName: String,
+    currentCategory: MediaCategory,
+    onDismiss: () -> Unit,
+    onConfirm: (String, MediaCategory) -> Unit
+) {
     var name by remember { mutableStateOf(currentName) }
+    var category by remember { mutableStateOf(currentCategory) }
+    val cats = listOf(MediaCategory.ANIME, MediaCategory.MOVIE, MediaCategory.SERIES, MediaCategory.LIVE_ACTION)
+
     Dialog(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.fillMaxWidth()
             .background(FxDark, RoundedCornerShape(12.dp)).padding(20.dp)) {
-            Text("Ganti Nama", color = FxWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("Edit Info", color = FxWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true,
-                label = { Text("Nama baru", color = FxGray) },
+                label = { Text("Judul", color = FxGray) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = FxRed, unfocusedBorderColor = FxGray,
                     focusedTextColor = FxWhite, unfocusedTextColor = FxWhite, cursorColor = FxRed
                 ), modifier = Modifier.fillMaxWidth())
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Kategori", color = FxGray, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                cats.take(2).forEach { cat ->
+                    val sel = category == cat
+                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp))
+                        .background(if (sel) FxRed else FxCard)
+                        .clickable { category = cat }.padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text(cat.label, color = if (sel) FxWhite else FxGray, fontSize = 12.sp,
+                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal) }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                cats.drop(2).forEach { cat ->
+                    val sel = category == cat
+                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp))
+                        .background(if (sel) FxRed else FxCard)
+                        .clickable { category = cat }.padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text(cat.label, color = if (sel) FxWhite else FxGray, fontSize = 12.sp,
+                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal) }
+                }
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f),
                     border = BorderStroke(1.dp, FxGray)) { Text("Batal", color = FxGray) }
-                Button(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) },
+                Button(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), category) },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = FxRed)) {
                     Text("Simpan", color = FxWhite, fontWeight = FontWeight.Bold)

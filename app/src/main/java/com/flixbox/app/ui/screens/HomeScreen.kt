@@ -20,10 +20,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.flixbox.app.data.MediaCategory
 import com.flixbox.app.data.MediaModel
 import com.flixbox.app.data.MediaRepository
+import com.flixbox.app.data.SortOption
+import com.flixbox.app.data.WatchStatus
 import com.flixbox.app.ui.theme.*
 import kotlinx.coroutines.delay
 
@@ -59,6 +62,10 @@ fun HomeScreen(
 ) {
     var selectedCategory by remember { mutableStateOf(MediaCategory.ALL) }
     var heroBannerIndex by remember { mutableStateOf(0) }
+    // P4: filter status tontonan & sorting, digabung satu dialog biar navbar tidak penuh
+    var statusFilter by remember { mutableStateOf<WatchStatus?>(null) } // null = semua status
+    var sortOption by remember { mutableStateOf(SortOption.TITLE_ASC) }
+    var showFilterDialog by remember { mutableStateOf(false) }
 
     // mediaList & isLoading sekarang dikirim dari FlixBoxApp (satu sumber data), bukan
     // di-fetch ulang di sini. Sebelumnya HomeScreen punya LaunchedEffect sendiri yang
@@ -76,9 +83,16 @@ fun HomeScreen(
         }
     }
 
-    val filteredList = remember(mediaList, selectedCategory) {
-        if (selectedCategory == MediaCategory.ALL) mediaList
-        else mediaList.filter { it.category == selectedCategory }
+    val filteredList = remember(mediaList, selectedCategory, statusFilter, sortOption) {
+        var list = if (selectedCategory == MediaCategory.ALL) mediaList
+            else mediaList.filter { it.category == selectedCategory }
+        statusFilter?.let { status -> list = list.filter { repository.getWatchStatus(it) == status } }
+        list = when (sortOption) {
+            SortOption.TITLE_ASC -> list.sortedBy { it.title.lowercase() }
+            SortOption.TITLE_DESC -> list.sortedByDescending { it.title.lowercase() }
+            SortOption.DATE_ADDED_DESC -> list.sortedByDescending { it.dateAdded }
+        }
+        list
     }
 
     val recentMedia = remember(mediaList) {
@@ -86,6 +100,10 @@ fun HomeScreen(
             .mapNotNull { (path, _) -> mediaList.firstOrNull { path.startsWith(it.folderPath) } }
             .distinctBy { it.folderPath }.take(15)
     }
+
+    // P4: Favorite & Watchlist — section di Home, independen dari filter kategori di atas
+    val favoriteMedia = remember(mediaList) { mediaList.filter { repository.isFavorite(it.folderPath) } }
+    val watchlistMedia = remember(mediaList) { mediaList.filter { repository.isInWatchlist(it.folderPath) } }
 
     val featuredMedia = mediaList.getOrNull(heroBannerIndex)
 
@@ -138,7 +156,8 @@ fun HomeScreen(
                 item {
                     CategoryNav(
                         selected = selectedCategory,
-                        onSelect = { selectedCategory = it }
+                        onSelect = { selectedCategory = it },
+                        onFilterClick = { showFilterDialog = true }
                     )
                 }
 
@@ -151,6 +170,30 @@ fun HomeScreen(
                             repository = repository,
                             cardType = CardType.WIDE,
                             onItemClick = onContinueWatchingClick
+                        )
+                    }
+                }
+
+                // Favorite & Watchlist (P4)
+                if (favoriteMedia.isNotEmpty()) {
+                    item {
+                        SectionRow(
+                            title = "Favorite",
+                            items = favoriteMedia,
+                            repository = repository,
+                            cardType = CardType.PORTRAIT,
+                            onItemClick = onMediaClick
+                        )
+                    }
+                }
+                if (watchlistMedia.isNotEmpty()) {
+                    item {
+                        SectionRow(
+                            title = "Watchlist",
+                            items = watchlistMedia,
+                            repository = repository,
+                            cardType = CardType.PORTRAIT,
+                            onItemClick = onMediaClick
                         )
                     }
                 }
@@ -186,6 +229,19 @@ fun HomeScreen(
             onAddClick = onAddClick,
             onSettingsClick = onSettingsClick,
             modifier = Modifier.align(Alignment.TopCenter)
+        )
+    }
+
+    if (showFilterDialog) {
+        FilterSortDialog(
+            statusFilter = statusFilter,
+            sortOption = sortOption,
+            onApply = { newStatus, newSort ->
+                statusFilter = newStatus
+                sortOption = newSort
+                showFilterDialog = false
+            },
+            onDismiss = { showFilterDialog = false }
         )
     }
 }
@@ -328,28 +384,94 @@ fun HeroBanner(
 
 // ── Category Nav ───────────────────────────────────────────────────────────────
 @Composable
-fun CategoryNav(selected: MediaCategory, onSelect: (MediaCategory) -> Unit) {
+fun CategoryNav(selected: MediaCategory, onSelect: (MediaCategory) -> Unit, onFilterClick: () -> Unit) {
     val cats = listOf(MediaCategory.ALL, MediaCategory.ANIME,
         MediaCategory.MOVIE, MediaCategory.SERIES, MediaCategory.LIVE_ACTION)
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        cats.forEach { cat ->
-            val isSelected = cat == selected
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (isSelected) FxRed else FxCard)
-                    .clickable { onSelect(cat) }
-                    .padding(horizontal = 14.dp, vertical = 7.dp)
-            ) {
-                Text(cat.label, color = if (isSelected) FxWhite else FxLightGray,
-                    fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.weight(1f)
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            cats.forEach { cat ->
+                val isSelected = cat == selected
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (isSelected) FxRed else FxCard)
+                        .clickable { onSelect(cat) }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(cat.label, color = if (isSelected) FxWhite else FxLightGray,
+                        fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                }
             }
         }
+        // P4: Filter (status tontonan) & Urutkan, digabung satu dialog
+        IconButton(onClick = onFilterClick, modifier = Modifier.padding(end = 8.dp)) {
+            Icon(Icons.Default.FilterList, "Filter & Urutkan", tint = FxWhite)
+        }
+    }
+}
+
+// P4 — Filter (status tontonan) & Urutkan koleksi, digabung satu dialog
+@Composable
+fun FilterSortDialog(
+    statusFilter: WatchStatus?,
+    sortOption: SortOption,
+    onApply: (WatchStatus?, SortOption) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var status by remember { mutableStateOf(statusFilter) }
+    var sort by remember { mutableStateOf(sortOption) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth()
+            .background(FxDark, RoundedCornerShape(12.dp)).padding(20.dp)) {
+            Text("Filter & Urutkan", color = FxWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Status Tontonan", color = FxGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(6.dp))
+            FilterOptionRow("Semua", status == null) { status = null }
+            FilterOptionRow("Belum Ditonton", status == WatchStatus.BELUM_DITONTON) { status = WatchStatus.BELUM_DITONTON }
+            FilterOptionRow("Sedang Ditonton", status == WatchStatus.SEDANG_DITONTON) { status = WatchStatus.SEDANG_DITONTON }
+            FilterOptionRow("Selesai", status == WatchStatus.SELESAI) { status = WatchStatus.SELESAI }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Urutkan", color = FxGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(6.dp))
+            SortOption.values().forEach { opt ->
+                FilterOptionRow(opt.label, sort == opt) { sort = opt }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f),
+                    border = BorderStroke(1.dp, FxGray)) { Text("Batal", color = FxGray) }
+                Button(onClick = { onApply(status, sort) }, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = FxRed)) {
+                    Text("Terapkan", color = FxWhite, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            if (selected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
+            null, tint = if (selected) FxRed else FxGray, modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(label, color = FxWhite, fontSize = 13.sp)
     }
 }
 

@@ -111,20 +111,21 @@ fun FlixBoxApp(repository: MediaRepository) {
 
     val scope = rememberCoroutineScope()
 
+    // Daftar episode gabungan semua season (atau flat kalau tanpa season) — sama persis
+    // cara DetailScreen menyusun daftar buat tombol play biasa. Dipakai bareng oleh
+    // Continue Watching (P2) dan pencarian episode (P4) biar tidak duplikat logic.
+    suspend fun episodesFor(media: MediaModel): List<EpisodeModel> =
+        if (media.hasSeasons) repository.getSeasons(media.folderPath).flatMap { it.episodes }
+        else repository.getEpisodes(media.folderPath)
+
     // P2: tap kartu "Lanjutkan Nonton" → langsung ke Player di episode & posisi terakhir,
-    // bukan cuma buka Detail lagi. Episode terakhir dicari dari getRecentlyWatched(),
-    // lalu dicocokkan ke daftar episode (digabung semua season kalau ada, sama persis
-    // seperti cara DetailScreen menyusun daftar buat tombol play biasa).
+    // bukan cuma buka Detail lagi. Episode terakhir dicari dari getRecentlyWatched().
     val onContinueWatchingClick: (MediaModel) -> Unit = { media ->
         scope.launch {
             val lastPath = repository.getRecentlyWatched()
                 .firstOrNull { (path, _) -> path.startsWith(media.folderPath) }
                 ?.first
-            val episodes = if (media.hasSeasons) {
-                repository.getSeasons(media.folderPath).flatMap { it.episodes }
-            } else {
-                repository.getEpisodes(media.folderPath)
-            }
+            val episodes = episodesFor(media)
             if (episodes.isNotEmpty()) {
                 val idx = episodes.indexOfFirst { it.path == lastPath }.let { if (it >= 0) it else 0 }
                 currentScreen = Screen.Player(episodes = episodes, startIndex = idx, sourceMedia = media)
@@ -132,6 +133,15 @@ fun FlixBoxApp(repository: MediaRepository) {
                 // Episode terakhir sudah tidak ada (terhapus/dipindah) — fallback ke Detail
                 currentScreen = Screen.Detail(media)
             }
+        }
+    }
+
+    // P4: tap hasil pencarian episode → langsung ke Player di episode itu persis
+    val onEpisodeSearchClick: (MediaModel, EpisodeModel) -> Unit = { media, episode ->
+        scope.launch {
+            val episodes = episodesFor(media)
+            val idx = episodes.indexOfFirst { it.path == episode.path }.let { if (it >= 0) it else 0 }
+            currentScreen = Screen.Player(episodes = episodes, startIndex = idx, sourceMedia = media)
         }
     }
 
@@ -215,6 +225,7 @@ fun FlixBoxApp(repository: MediaRepository) {
                     repository = repository,
                     allMedia = cachedMediaList,
                     onMediaClick = { media -> currentScreen = Screen.Detail(media) },
+                    onEpisodeClick = onEpisodeSearchClick,
                     onBack = { currentScreen = Screen.Home }
                 )
             }
@@ -247,6 +258,7 @@ fun FlixBoxApp(repository: MediaRepository) {
                     episodes = screen.episodes,
                     startIndex = screen.startIndex,
                     repository = repository,
+                    titleFolderPath = screen.sourceMedia.folderPath,
                     onBack = { currentScreen = Screen.Detail(screen.sourceMedia) }
                 )
             }

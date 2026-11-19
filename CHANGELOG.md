@@ -4,6 +4,28 @@ Semua perubahan penting dicatat di sini. Format bebas, urut dari versi terbaru.
 
 ---
 
+## v2.5.0 — P4: Favorite, Watchlist, status tontonan, pencarian episode, sorting, metadata
+
+- **Favorite** & **Watchlist** — tombol toggle di Detail, section baru di Home
+  (muncul kalau ada isinya)
+- **Filter status tontonan** — dialog "Filter & Urutkan" baru (ikon funnel di
+  sebelah kategori di Home): Semua / Belum Ditonton / Sedang Ditonton / Selesai.
+  Dihitung dari counter ringan, bukan scan ulang semua episode, jadi filter tetap
+  cepat walau koleksi besar
+- **Sorting** — di dialog yang sama: A-Z, Z-A, Terbaru Ditambah
+- **Pencarian episode** — SearchScreen sekarang juga cari nama episode di semua
+  judul (di-debounce 400ms, scan nama file doang — bukan decode thumbnail/durasi),
+  tap hasilnya langsung buka Player di episode itu
+- **Pengelolaan metadata** — "Rename" di Detail jadi "Edit Info": ubah judul DAN
+  kategori sekaligus (pindah folder ke kategori lain otomatis)
+- **Fix sekalian ditemukan saat kerjain ini:** rename/pindah kategori lewat Edit
+  Info sekarang otomatis memindahkan posisi tontonan, status selesai ditonton,
+  Favorite, Watchlist, dan Lanjutkan Nonton ke path barunya. Sebelum fix ini,
+  semuanya akan ter-reset tiap kali judul di-edit (karena semua tersimpan per-path)
+- Catatan: migrasi di atas cuma jalan kalau diubah **lewat Edit Info di app ini** —
+  kalau folder judul di-rename/dipindah lewat file manager lain di luar app,
+  status-status tersebut tetap akan reset
+
 ## v2.4.0 — P3: Subtitle eksternal & pemilihan audio track
 
 - **Subtitle eksternal** (`.srt`, `.vtt`, `.ass`/`.ssa` — ketiganya native Media3,

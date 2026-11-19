@@ -58,6 +58,7 @@ fun PlayerScreen(
     episodes: List<EpisodeModel>,
     startIndex: Int,
     repository: MediaRepository,
+    titleFolderPath: String = "",
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -160,7 +161,7 @@ fun PlayerScreen(
     fun goToEpisode(newIndex: Int) {
         if (newIndex < 0 || newIndex >= episodes.size) return
         episodes.getOrNull(currentIndex)?.let {
-            repository.saveWatchedPosition(it.path, player.currentPosition, it.duration)
+            repository.saveWatchedPosition(it.path, player.currentPosition, it.duration, titleFolderPath)
         }
         currentIndex = newIndex
         loadEpisode(newIndex)
@@ -213,7 +214,7 @@ fun PlayerScreen(
                         currentIndex < episodes.size - 1 -> {
                             // Tandai episode ini selesai, lalu pindah
                             episodes.getOrNull(currentIndex)?.let {
-                                repository.saveWatchedPosition(it.path, it.duration, it.duration)
+                                repository.saveWatchedPosition(it.path, it.duration, it.duration, titleFolderPath)
                             }
                             // Update currentIndex langsung tanpa trigger recompose loadEpisode
                             val nextIndex = currentIndex + 1
@@ -229,7 +230,7 @@ fun PlayerScreen(
         onDispose {
             player.removeListener(listener)
             episodes.getOrNull(currentIndex)?.let {
-                repository.saveWatchedPosition(it.path, player.currentPosition, it.duration)
+                repository.saveWatchedPosition(it.path, player.currentPosition, it.duration, titleFolderPath)
             }
             player.release()
         }
@@ -254,7 +255,7 @@ fun PlayerScreen(
         while (true) {
             delay(10_000L)
             episodes.getOrNull(currentIndex)?.let {
-                repository.saveWatchedPosition(it.path, player.currentPosition, it.duration)
+                repository.saveWatchedPosition(it.path, player.currentPosition, it.duration, titleFolderPath)
             }
         }
     }
@@ -390,7 +391,7 @@ fun PlayerScreen(
                 ) {
                     IconButton(onClick = {
                         episodes.getOrNull(currentIndex)?.let {
-                            repository.saveWatchedPosition(it.path, player.currentPosition, it.duration)
+                            repository.saveWatchedPosition(it.path, player.currentPosition, it.duration, titleFolderPath)
                         }
                         onBack()
                     }) {

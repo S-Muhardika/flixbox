@@ -15,8 +15,19 @@ data class MediaModel(
     val firstEpisodePath: String,
     val category: MediaCategory,
     val posterPath: String = "",
-    val hasSeasons: Boolean = false  // true jika punya subfolder season
+    val hasSeasons: Boolean = false, // true jika punya subfolder season
+    val dateAdded: Long = 0L         // lastModified() folder judul — dipakai sorting "Terbaru"
 )
+
+// Status tontonan per judul (P4) — dihitung dari counter episode selesai ditonton
+// dibanding episodeCount, bukan dari scan ulang semua episode (biar tetap ringan)
+enum class WatchStatus { BELUM_DITONTON, SEDANG_DITONTON, SELESAI }
+
+enum class SortOption(val label: String) {
+    TITLE_ASC("A-Z"),
+    TITLE_DESC("Z-A"),
+    DATE_ADDED_DESC("Terbaru Ditambah")
+}
 
 data class SeasonModel(
     val name: String,               // "Season 1", "Season 2", dst
